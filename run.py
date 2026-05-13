@@ -24,6 +24,7 @@ from data import (
 )
 from methods.baseline import BaselineMethod
 from methods.cross_agent import CrossAgentMethod
+from methods.latent_cross_agent import LatentCrossAgentMethod
 from methods.latent_mas import LatentMASMethod
 from methods.text_mas import TextMASMethod
 from models import ModelWrapper
@@ -172,8 +173,8 @@ def main():
     parser = argparse.ArgumentParser()
 
     # core args for experiments
-    parser.add_argument("--method", choices=["baseline", "text_mas", "latent_mas", "cross_agent"], required=True,
-                        help="Which multi-agent method to run: 'baseline', 'text_mas', 'latent_mas', or 'cross_agent'.")
+    parser.add_argument("--method", choices=["baseline", "text_mas", "latent_mas", "cross_agent", "latent_cross_agent"], required=True,
+                        help="Which multi-agent method to run: 'baseline', 'text_mas', 'latent_mas', 'cross_agent', or 'latent_cross_agent'.")
     parser.add_argument("--model_name", type=str, required=True,
                         help="Model name to use (e.g. 'Qwen/Qwen3-14B', 'Qwen/Qwen2-VL-7B-Instruct').")
     parser.add_argument("--max_samples", type=int, default=-1, help="Number of questions to evaluate; set -1 to use all samples.")
@@ -224,6 +225,15 @@ def main():
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9, help="Target GPU memory utilization for vLLM")
 
     args = parser.parse_args()
+
+    if args.method == "latent_cross_agent":
+        if args.task != "conll04":
+            raise ValueError("--method latent_cross_agent currently supports --task conll04 only")
+        if args.use_vllm:
+            raise ValueError("latent_cross_agent v1 supports HF backend only")
+        if args.generate_bs != 1:
+            print("[INFO] latent_cross_agent v1 requires generate_bs=1; forcing --generate_bs 1")
+            args.generate_bs = 1
     
     # Force batch_size=1 for vision models to avoid image token mismatch
     if args.use_vision_model:
@@ -321,6 +331,15 @@ def main():
             **common_kwargs,
             generate_bs=args.generate_bs,
             use_vllm=args.use_vllm,
+            args=args,
+        )
+    elif args.method == "latent_cross_agent":
+        method = LatentCrossAgentMethod(
+            model,
+            latent_steps=args.latent_steps,
+            max_new_tokens=args.max_new_tokens,
+            **common_kwargs,
+            generate_bs=args.generate_bs,
             args=args,
         )
 

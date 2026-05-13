@@ -41,6 +41,8 @@ def _norm_text(value) -> str:
 
 def _norm_entity_type(value) -> str:
     raw = str(value or "").strip().upper().replace("PERSON", "PER").replace("LOCATION", "LOC").replace("ORGANIZATION", "ORG")
+    if raw in {"PEOP", "PEOPLE"}:
+        raw = "PER"
     return raw if raw in set(CONLL04_ENTITY_TYPES) else "OTHER"
 
 
