@@ -1,0 +1,2311 @@
+﻿
+def build_agent_message_sequential_latent_mas(role: str, question: str, context: str = "", method=None, args=None):
+
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+
+    assert method in ["latent_mas"], "this prompt only for latent_mas method"
+    assert "qwen" in args.model_name.lower(), "this prompt only for qwen models"
+
+    if role == "planner":
+        user_prompt = f"""You are a Planner Agent. Given an input question, design a clear, step-by-step plan for how to solve the question.
+
+Question: {question}
+
+Your outlined plan should be concise with a few bulletpoints for each step. Do not produce the final answer.
+Now output your plan to solve the question below:
+"""
+    
+    elif role == "critic":
+        user_prompt = f"""
+Question: {question}
+
+You are a Critic Agent to evaluate the correctness of the input plan for the given question and provide helpful feedback for improving the plan.
+The plan information is provided in latent KV representation format. Review the plan and question and output:
+(1) original plan contents
+(2) constructive feedback on the original plan.
+
+Format your response as follows:
+Original Plan: [Copy the provided Planner Agent's plan here]
+Feedback: [Your detailed feedback to improve the plan here]
+
+Now, output your response below:
+"""
+    
+    elif role == "refiner":
+        user_prompt = f"""
+Question: {question}
+
+You are a Refiner Agent to provide a refined step-by-step plan for solving the given question.
+You are provided with:
+(1) latent-format information: a previous plan with feedback
+(2) text-format information: the input question you need to solve.
+
+Based on the input, write a refined and improved plan to solve the question. Make sure your output plan is correct and concise.
+
+Now, output your refined plan below:
+"""
+    
+    elif role == "judger":
+        if args.task in ['gsm8k', 'aime2024', 'aime2025']:
+            user_prompt = f"""
+Target Question: {question}
+
+You are a helpful assistant. You are provided with latent information for reference and a target question to solve. 
+
+The latent information might contain irrelevant contents. Ignore it if it is not helpful for solving the target question.
+
+You must reason step-by-step to solve the provided Target Question without outputting other irrelevant information.
+
+Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"""
+        
+        elif args.task in ["arc_easy", "arc_challenge", "gpqa", 'medqa']:
+            user_prompt = f"""
+Target Question: {question}
+
+You are a helpful assistant. You are provided with latent information for reference and a target question to solve. 
+
+The latent information might contain irrelevant contents. Ignore it if it is not helpful for solving the target question.
+
+You must reason step-by-step to solve the provided Target Question without outputting other irrelevant information.
+Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
+
+Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"""
+
+        elif args.task in ["mbppplus", "humanevalplus"]:
+            user_prompt = f"""
+Target Question: {question}
+
+You are a helpful assistant. You are provided with latent information for reference and a target question to solve.
+
+The latent information might contain irrelevant contents. Ignore it if it is not helpful for solving the target question.
+
+You must reason step-by-step to solve the provided Target Question without outputting other irrelevant information.
+You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import math
+def add(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block.
+
+Now, reason step by step and output the final answer inside ```python
+YOUR_PYTHON_CODE
+```.
+"""
+
+        elif args.task in ["winogrande"]:
+            user_prompt = f"""
+Target Question: {question}
+
+You are a helpful assistant. You are provided with latent information for reference and a target question to solve. 
+
+The latent information might contain irrelevant contents. Ignore it if it is not helpful for solving the target question.
+
+You must reason step-by-step to solve the provided Target Question without outputting other irrelevant information.
+Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box.
+
+Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"""
+
+        else: 
+            raise NotImplementedError(f"Task {args.task} not implemented in v5 judger prompt.")
+        
+    return [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_agent_message_hierarchical_latent_mas(role: str, question: str, context: str = "", method=None, args=None):
+
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+
+    assert method in ["latent_mas"], "this prompt only for latent_mas method"
+    assert "qwen" in args.model_name.lower(), "this prompt only for qwen models"
+
+    if args.task in ['gsm8k', 'aime2024', 'aime2025']:
+        if role == "planner":
+            user_content = f"""
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}
+
+Your response:
+"""
+    
+        elif role == "critic":
+            user_content = f"""
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}     
+
+Your response:
+"""
+    
+        elif role == "refiner":
+            user_content = f"""
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}
+
+Your response:       
+"""
+        elif role == "judger":
+            user_content = f"""
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}
+
+Your response:
+"""
+
+    elif args.task in ["arc_easy", "arc_challenge", "gpqa", "medqa"]:
+
+        if args.task == "medqa":
+
+            if role == "planner":
+                user_content = f"""
+You are a math agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. 
+
+Input Question: {question}
+
+Your response:
+"""
+            elif role == "critic":
+                user_content = f"""
+You are a science agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. 
+
+Input Question: {question}     
+
+Your response:
+"""
+            elif role == "refiner":
+                user_content = f"""
+You are a code agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. 
+
+Input Question: {question}
+
+Your response:       
+"""
+            elif role == "judger":
+
+                user_content = f"""
+You are a task summarizer. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. 
+
+Input Question: {question}
+
+Your response:
+"""
+
+        else:
+            if role == "planner":
+                user_content = f"""
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
+
+Input Question: {question}
+
+Your response:
+"""
+    
+            elif role == "critic":
+                user_content = f"""
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
+
+Input Question: {question}     
+
+Your response:
+"""
+    
+            elif role == "refiner":
+                user_content = f"""
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
+
+Input Question: {question}
+
+Your response:       
+"""
+            elif role == "judger":
+
+                user_content = f"""
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
+
+Input Question: {question}
+
+Your response:
+"""
+
+    elif args.task in ["mbppplus", "humanevalplus"]:
+        
+        if role == "planner":
+            user_content = f"""
+You are a math agent. Given the input question, reason step by step: please provide an efficient and self-contained Python function that solves the following problem in a markdown code block:\n```\nYOUR_PYTHON_CODE\n```.
+You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import math
+def add(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block. 
+
+Input Question: {question}
+
+Your response:
+"""
+        elif role == "critic":
+            user_content = f"""
+You are a science agent. Given the input question, reason step by step: please provide an efficient and self-contained Python function that solves the following problem in a markdown code block:\n```\nYOUR_PYTHON_CODE\n```.
+You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import math
+def add(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block. 
+
+Input Question: {question}
+
+Your response:
+"""
+        elif role == "refiner":
+            user_content = f"""
+You are a code agent. Given the input question, reason step by step: please provide an efficient and self-contained Python function that solves the following problem in a markdown code block:\n```\nYOUR_PYTHON_CODE\n```.
+You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import math
+def add(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block. 
+
+Input Question: {question}
+
+Your response:       
+"""
+        elif role == "judger":
+            user_content = f"""
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step by step: please provide an efficient and self-contained Python function that solves the following problem in a markdown code block:\n```\nYOUR_PYTHON_CODE\n```.
+You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import needed_library
+def FUNC_NAME(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block. 
+    
+Input Question: {question}
+
+Your response:
+"""
+
+    elif args.task in ["winogrande"]:
+        if role == "planner":
+            user_content = f"""
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}
+
+Your response:
+"""
+    
+        elif role == "critic":
+            user_content = f"""
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}     
+
+Your response:
+"""
+    
+        elif role == "refiner":
+            user_content = f"""
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}
+
+Your response:       
+"""
+        elif role == "judger":
+            user_content = f"""
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}
+
+Your response:
+"""
+
+    return [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_agent_messages_sequential_text_mas(role: str, question: str, context: str = "", method=None, args=None):
+
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+
+    assert method in ["text_mas"], "only for text_mas method"
+    assert "qwen" in args.model_name.lower(), "only for qwen models"
+
+    # truncate context if needed
+    ctx = context[: args.text_mas_context_length]
+
+    if role == "planner":
+        user_content = f"""
+You are a Planner Agent. Given an input question, design a clear, step-by-step plan for how to solve the question.
+
+## Input Question:
+{question}
+
+Your outlined plan should be concise with a few bullet points for each step. Do not produce the final answer.
+
+## Format your response as follows:
+Planner Agent's Output:
+[Your detailed plan here]
+
+Now output your plan to solve the question below:
+"""
+
+    elif role == "critic":
+        user_content = f"""
+You are a Critic Agent. You are provided with:
+(1) the original question, and
+(2) the Planner Agent's plan in text format.
+
+Your job is to carefully evaluate the correctness and completeness of the plan and provide helpful feedback.
+
+## Input Question:
+{question}
+
+## Plan from Planner Agent:
+{ctx}
+
+## Format your response as follows:
+Critic Agent's Output:
+Original Plan: [Copy the provided Planner Agent's plan here]
+Feedback: [Your detailed feedback to improve the plan here]
+
+Now, output your response below:
+"""
+
+    elif role == "refiner":
+        user_content = f"""
+You are a Refiner Agent. You are provided with:
+(1) the original question, and
+(2) the Planner Agent's plan together with Critic Agent's feedback in text format.
+
+Your job is to incorporate the feedback and produce an improved, refined step-by-step plan.
+
+## Input Question:
+{question}
+
+## Original Plan and Critic Feedback:
+{ctx}
+
+## Format your response as follows:
+Refiner Agent's Output:
+[Your refined and improved plan here]
+
+Make sure your output plan is logically correct, concise, and sufficient to guide final problem solving.
+Now, output your refined plan below:
+"""
+
+    elif role == "judger":
+        task = getattr(args, "task", None)
+
+        if task in ["gsm8k", "aime2024", "aime2025"]:
+            user_content = f"""
+Target Question: {question}
+
+You are the final solver agent in a sequential multi-agent system (planner -> critic -> refiner -> solver).
+You are provided with the Refiner Agent's plan as reference.
+
+Refined Plan from Previous Agents:
+{ctx}
+
+The plan might contain irrelevant or incorrect contents. Ignore them if they are not helpful for solving the target question.
+
+You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
+
+Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"""
+
+        elif task in ["arc_easy", "arc_challenge", "gpqa", "medqa"]:
+            user_content = f"""
+Target Question: {question}
+
+You are the final solver agent in a sequential multi-agent system (planner -> critic -> refiner -> solver).
+You are provided with the Refiner Agent's plan as reference.
+
+Refined Plan from Previous Agents:
+{ctx}
+
+The plan might contain irrelevant or incorrect contents. Ignore them if they are not helpful for solving the target question.
+
+You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
+Your final answer must be selected from A,B,C,D. For example \\boxed{{A}}. Do not add any other contents inside the box.
+
+Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"""
+
+        elif task in ["mbppplus", "humanevalplus"]:
+            user_content = f"""
+Target Question: {question}
+
+You are the final solver agent in a sequential multi-agent system (planner -> critic -> refiner -> solver).
+You are provided with the Refiner Agent's plan as reference.
+
+Refined Plan from Previous Agents:
+{ctx}
+
+The plan might contain irrelevant or incorrect contents. Ignore them if they are not helpful for solving the target question.
+
+You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
+You must put all python code as self-contained Python function(s) in markdown code blocks. For example:
+```python
+import math
+def add(a, b):
+    return a + b
+```
+Do not add any other contents inside the markdown code block.
+"""
+            
+        elif task in ["winogrande"]:
+            user_content = f"""
+Target Question: {question}
+
+You are the final solver agent in a sequential multi-agent system (planner -> critic -> refiner -> solver).
+You are provided with the Refiner Agent's plan as reference.
+
+Refined Plan from Previous Agents:
+{ctx}
+
+The plan might contain irrelevant or incorrect contents. Ignore them if they are not helpful for solving the target question.
+
+You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
+Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box.
+
+Now, reason step by step and output the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"""
+        else:
+            user_content = f"""
+Target Question: {question}
+
+You are the final solver agent in a sequential multi-agent system (planner -> critic -> refiner -> solver).
+You are provided with the Refiner Agent's plan as reference.
+
+Refined Plan from Previous Agents:
+{ctx}
+
+The plan might contain irrelevant or incorrect contents. Ignore them if they are not helpful for solving the target question.
+
+You must reason step-by-step to solve the **provided Target Question** without outputting other irrelevant information.
+
+Now, reason step by step and present your final answer clearly at the end.
+"""
+
+    return [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_agent_messages_hierarchical_text_mas(role: str, question: str, context: str = "", method=None, args=None):
+
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+    
+    assert method in ["text_mas"], "this prompt only for text_mas method"
+    assert "qwen" in args.model_name.lower(), "this prompt only for qwen models"
+    
+    if args.task in ['gsm8k', 'aime2024', 'aime2025']:
+        if role == "planner":
+            user_content = f"""
+You are a math agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}
+
+Your response:
+"""
+    
+        elif role == "critic":
+            user_content = f"""
+You are a science agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}     
+
+Your response:
+"""
+    
+        elif role == "refiner":
+            user_content = f"""
+You are a code agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}
+
+Your response:       
+"""
+        elif role == "judger":
+            user_content = f"""
+You are a task summarizer. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Content from Previous Agent:
+{context[:args.text_mas_context_length]}
+
+Input Question: {question}
+
+Your response:
+"""
+
+    elif args.task in ["arc_easy", "arc_challenge", "gpqa", "medqa"]:
+        if role == "planner":
+            user_content = f"""
+You are a math agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}
+
+Your response:
+"""
+    
+        elif role == "critic":
+            user_content = f"""
+You are a science agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}     
+
+Your response:
+"""
+    
+        elif role == "refiner":
+            user_content = f"""
+You are a code agent. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Input Question: {question}
+
+Your response:       
+"""
+        elif role == "judger":
+
+            user_content = f"""
+You are a task summarizer. Given the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Content from Previous Agent:
+{context[:args.text_mas_context_length]}
+
+Input Question: {question}
+
+Your response:
+"""
+
+    elif args.task in ["mbppplus", "humanevalplus"]:
+        
+        if role == "planner":
+            user_content = f"""
+You are a math agent. You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import needed_library
+def FUNC_NAME(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block. 
+
+Input Question: {question}
+
+Your response:
+"""
+        elif role == "critic":
+            user_content = f"""
+You are a science agent. You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import needed_library
+def FUNC_NAME(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block. 
+
+Input Question: {question}
+
+Your response:
+"""
+        elif role == "refiner":
+            user_content = f"""
+You are a code agent. You must put all python code as self-contained Python function in markdown code blocks. For example ```python
+import needed_library
+def FUNC_NAME(a, b):
+    return a + b```. Do not add any other contents inside the markdown code block. 
+
+Input Question: {question}
+
+Your response:
+"""
+        elif role == "judger":
+            user_content = f"""
+You are a task summarizer. Given the final answer in markdown python code block.
+
+Content from Previous Agent:
+{context[:args.text_mas_context_length]}
+
+Input Question: {question}
+
+Your response:
+"""
+
+    elif args.task in ["winogrande"]:
+        if role == "planner":
+            user_content = f"""
+You are a math agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}
+
+Your response:
+"""
+    
+        elif role == "critic":
+            user_content = f"""
+You are a science agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}     
+
+Your response:
+"""
+    
+        elif role == "refiner":
+            user_content = f"""
+You are a code agent. Given the input question, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}
+
+Your response:       
+"""
+        elif role == "judger":
+            user_content = f"""
+You are a task summarizer. Given the input question and responses from previous agents as reference, reason step-by-step and put the final answer inside \\boxed{{YOUR_FINAL_ANSWER}}.
+
+Content from Previous Agent:
+{context[:args.text_mas_context_length]}
+
+"Your final answer must be selected from 1 and 2. For example \\boxed{{1}} or \\boxed{{2}}. Do not add any other contents inside the box."
+
+Input Question: {question}
+
+Your response:
+"""
+
+    return [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_agent_messages_single_agent(question: str, args=None) -> list[dict]:
+    # ====== 鏂板锛氫笓闂ㄦ嫤鎴?chemprot 浠诲姟锛屼娇鐢ㄤ笌寰皟缁濆涓€鑷寸殑 Prompt ======
+    if args and args.task == "chemprot":
+        instruction = """Task: chemical-protein relation extraction.
+
+Output JSON format MUST EXACTLY MATCH this schema:
+{"relations": [{"head": "chemical_name", "relation": "ACTIVATOR", "tail": "protein_name"}]}
+
+Rules:
+- "head" MUST be the chemical compound.
+- "tail" MUST be the gene or protein.
+- "relation" MUST be one of the following exact interaction types: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- If no relations exist in the text, output {"relations": []}."""
+
+        system_msg = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+        user_msg = f"{instruction}\n\nDocument text:\n{question}\n\nExtract and output JSON:"
+
+        return [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg}
+        ]
+
+    # ====== 涓嬮潰淇濈暀浣犲師鏈夌殑浠ｇ爜 (渚嬪 GSM8K, DocRED 绛夌殑閫昏緫) ======
+    system_prompt = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+    content = f"Question: {question}\n\nYou are a helpful assistant.\n\nYou must reason step-by-step to solve the question without outputting other irrelevant information.\nPresent your reasoning, and then clearly state your final answer at the end."
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": content}
+    ]
+
+
+# ============= Document Extraction Dataset Prompts =============
+
+# DocRED P-ID 鈫?鑷劧璇█鍏崇郴鍚嶆槧灏?(鍏ㄩ儴96涓猈ikidata灞炴€?
+DOCRED_REL_MAP = {
+    "P6": "head of government",
+    "P17": "country",
+    "P19": "place of birth",
+    "P20": "place of death",
+    "P22": "father",
+    "P25": "mother",
+    "P26": "spouse",
+    "P27": "country of citizenship",
+    "P30": "continent",
+    "P31": "instance of",
+    "P35": "head of state",
+    "P36": "capital",
+    "P37": "official language",
+    "P39": "position held",
+    "P40": "child",
+    "P50": "author",
+    "P54": "member of sports team",
+    "P57": "director",
+    "P58": "screenwriter",
+    "P69": "educated at",
+    "P86": "composer",
+    "P102": "member of political party",
+    "P108": "employer",
+    "P112": "founded by",
+    "P118": "league",
+    "P123": "publisher",
+    "P127": "owned by",
+    "P131": "located in the administrative territorial entity",
+    "P136": "genre",
+    "P137": "operator",
+    "P140": "religion",
+    "P150": "contains administrative territorial entity",
+    "P155": "follows",
+    "P156": "followed by",
+    "P159": "headquarters location",
+    "P161": "cast member",
+    "P162": "producer",
+    "P166": "award received",
+    "P170": "creator",
+    "P171": "parent taxon",
+    "P172": "ethnic group",
+    "P175": "performer",
+    "P176": "manufacturer",
+    "P178": "developer",
+    "P179": "series",
+    "P190": "sister city",
+    "P194": "legislative body",
+    "P205": "basin country",
+    "P206": "located in or next to body of water",
+    "P241": "military branch",
+    "P264": "record label",
+    "P272": "production company",
+    "P276": "location",
+    "P279": "subclass of",
+    "P355": "subsidiary",
+    "P361": "part of",
+    "P364": "original language of work",
+    "P400": "platform",
+    "P403": "mouth of the watercourse",
+    "P449": "original network",
+    "P463": "member of",
+    "P488": "chairperson",
+    "P495": "country of origin",
+    "P527": "has part",
+    "P551": "residence",
+    "P569": "date of birth",
+    "P570": "date of death",
+    "P571": "inception",
+    "P576": "dissolved, abolished or demolished",
+    "P577": "publication date",
+    "P580": "start time",
+    "P582": "end time",
+    "P585": "point in time",
+    "P607": "conflict",
+    "P674": "characters",
+    "P676": "lyrics by",
+    "P706": "located on terrain feature",
+    "P710": "participant",
+    "P737": "influenced by",
+    "P740": "location of formation",
+    "P749": "parent organization",
+    "P800": "notable work",
+    "P807": "separated from",
+    "P840": "narrative location",
+    "P937": "work location",
+    "P1001": "applies to jurisdiction",
+    "P1056": "product or material produced",
+    "P1198": "unemployment rate",
+    "P1336": "territory claimed by",
+    "P1344": "participant of",
+    "P1365": "replaces",
+    "P1366": "replaced by",
+    "P1376": "capital of",
+    "P1412": "languages spoken, written or signed",
+    "P1441": "present in work",
+    "P3373": "sibling",
+}
+
+# 鍙嶅悜鏄犲皠: 鑷劧璇█鍚?鈫?P-ID (灏忓啓鍖归厤)
+REL_NAME_TO_ID = {name.lower(): pid for pid, name in DOCRED_REL_MAP.items()}
+
+# DocRED relation definitions (all 96 Wikidata properties)
+DOCRED_RELATIONS_FULL = """ALL VALID RELATIONS (use these IDs):
+
+- P6: head of government
+- P17: country
+- P19: place of birth
+- P20: place of death
+- P22: father
+- P25: mother
+- P26: spouse
+- P27: country of citizenship
+- P30: continent
+- P31: instance of
+- P35: head of state
+- P36: capital
+- P37: official language
+- P39: position held
+- P40: child
+- P50: author
+- P54: member of sports team
+- P57: director
+- P58: screenwriter
+- P69: educated at
+- P86: composer
+- P102: member of political party
+- P108: employer
+- P112: founded by
+- P118: league
+- P123: publisher
+- P127: owned by
+- P131: located in the administrative territorial entity
+- P136: genre
+- P137: operator
+- P140: religion
+- P150: contains administrative territorial entity
+- P155: follows
+- P156: followed by
+- P159: headquarters location
+- P161: cast member
+- P162: producer
+- P166: award received
+- P170: creator
+- P171: parent taxon
+- P172: ethnic group
+- P175: performer
+- P176: manufacturer
+- P178: developer
+- P179: series
+- P190: sister city
+- P194: legislative body
+- P205: basin country
+- P206: located in or next to body of water
+- P241: military branch
+- P264: record label
+- P272: production company
+- P276: location
+- P279: subclass of
+- P355: subsidiary
+- P361: part of
+- P364: original language of work
+- P400: platform
+- P403: mouth of the watercourse
+- P449: original network
+- P463: member of
+- P488: chairperson
+- P495: country of origin
+- P527: has part
+- P551: residence
+- P569: date of birth
+- P570: date of death
+- P571: inception
+- P576: dissolved, abolished or demolished
+- P577: publication date
+- P580: start time
+- P582: end time
+- P585: point in time
+- P607: conflict
+- P674: characters
+- P676: lyrics by
+- P706: located on terrain feature
+- P710: participant
+- P737: influenced by
+- P740: location of formation
+- P749: parent organization
+- P800: notable work
+- P807: separated from
+- P840: narrative location
+- P937: work location
+- P1001: applies to jurisdiction
+- P1056: product or material produced
+- P1198: unemployment rate
+- P1336: territory claimed by
+- P1344: participant of
+- P1365: replaces
+- P1366: replaced by
+- P1376: capital of
+- P1412: languages spoken, written or signed
+- P1441: present in work
+- P3373: sibling"""
+
+def build_extraction_prompts_sequential(dataset: str, role: str, question: str, item: dict, method=None, args=None):
+    """
+    Unified extraction prompts for DocRED/CORD/FUNSD/ChemProt datasets (Sequential mode).
+    """
+    import json
+    
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a document information extraction specialist."
+    
+    assert method in ["latent_mas"], "this prompt only for latent_mas method"
+    assert "qwen" in args.model_name.lower(), "this prompt only for qwen models"
+    
+    template = json.loads(item.get("extract_template", "{}"))
+    template_str = json.dumps(template, ensure_ascii=False, indent=2)
+    chunk_info = item.get("chunk_info", "")
+    entity_list = item.get("entity_list", "")
+    entity_list = item.get("entity_list", "")
+    entity_list = item.get("entity_list", "")
+    entity_list = item.get("entity_list", "")
+    
+    # Dataset-specific instructions
+    if dataset == "docred":
+        task_desc = "document-level relation extraction using entity indices and natural-language relation names."
+        focus_areas = "named entities (persons, organizations, locations, dates, etc.) and their relationships"
+        
+        rel_names_list = ", ".join(f'"{name}"' for name in DOCRED_REL_MAP.values())
+        output_constraint = f"Valid relation names: {rel_names_list}\nUse EXACT relation name strings. Use head_id/tail_id (integer indices from the entity list) instead of entity names."
+    
+    elif dataset == "cord":
+        task_desc = "receipt/invoice information extraction into a strictly nested JSON structure."
+        focus_areas = "menu items (nm, cnt, price) and total summary (total_price, cashprice, changeprice, subtotal_price, tax_price)"
+        output_constraint = f"""Output JSON format MUST EXACTLY MATCH this schema:
+{template_str}
+
+Rules:
+- Use EXACT keys: "nm", "cnt", "price" inside the "menu" array.
+- Use EXACT keys: "total_price", "cashprice", "changeprice", "subtotal_price", "tax_price" inside the "total" dict.
+- If a field or value is missing in the document, you MUST use an empty string "". Do not omit the key."""
+    
+    elif dataset == "funsd":
+        task_desc = "form understanding and key-value extraction"
+        focus_areas = "form entities (questions, answers, headers, other text) and their linking relationships"
+        output_constraint = f"""Output JSON format MUST EXACTLY MATCH this schema:
+{template_str}
+
+Rules:
+- Every entity MUST have a unique integer "id".
+- Use EXACT labels: "question", "answer", "header", "other".
+- Relations MUST link entities using their integer "id" for "head" and "tail", with type "linked"."""
+    
+    elif dataset == "chemprot":
+        task_desc = "chemical-protein relation extraction."
+        focus_areas = "chemical compounds, genes/proteins, and their interaction relations"
+        output_constraint = """Output JSON format MUST EXACTLY MATCH this schema:
+{"relations": [{"head": "chemical_name", "relation": "ACTIVATOR", "tail": "protein_name"}]}
+
+Rules:
+- "head" MUST be the chemical compound.
+- "tail" MUST be the gene or protein.
+- "relation" MUST be one of the following exact interaction types: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- If no relations exist in the text, output {"relations": []}."""
+    
+    else:
+        task_desc = "document information extraction."
+        focus_areas = "key information elements in the document"
+        output_constraint = "Fill all schema fields with extracted information."
+    
+    if role == "planner":
+        user_prompt = f"""You are a Document Scanner Agent (Phase 1: Information Discovery).
+
+Task: {task_desc}
+
+Document Section {chunk_info}:
+{question}
+
+Instructions:
+- Carefully read the document section
+- Identify ALL relevant information: {focus_areas}
+- Note context and relationships between information elements
+- Write down your detailed step-by-step analysis and findings.
+- Explain your reasoning explicitly.
+- Be thorough and precise
+
+Begin scanning:
+"""
+    
+    elif role == "critic":
+        if dataset == "docred":
+            user_prompt = f"""You are a Document Validator Agent (Phase 2: Cross-Verification).
+
+Task: {task_desc}
+
+You have latent information from the previous scanning phase.
+
+Document Section {chunk_info}:
+{question}
+
+Instructions:
+- Cross-check every extracted relation against the document text.
+- CRITICAL: Verify the DIRECTION of each relation 鈥?head_id is the SUBJECT (performing/described), tail_id is the OBJECT (target). Flag and correct any reversed relations.
+- Verify that all head_id/tail_id values are valid indices from the entity list; remove any out-of-range indices.
+- Remove hallucinated relations that are NOT explicitly stated in the text.
+- Write down your detailed verification findings. Explain your reasoning explicitly.
+
+Continue verification:
+"""
+        else:
+            user_prompt = f"""You are a Document Validator Agent (Phase 2: Cross-Verification).
+
+Task: {task_desc}
+
+You have latent information from the previous scanning phase.
+
+Document Section {chunk_info}:
+{question}
+
+Instructions:
+- Cross-check extracted information against document content
+- Verify accuracy of: {focus_areas}
+- Identify any missing or ambiguous information
+- Resolve inconsistencies
+- Write down your detailed verification findings. Explain your reasoning explicitly.
+
+Continue verification:
+"""
+    
+    elif role == "refiner":
+        user_prompt = f"""You are a Document Structuring Agent (Phase 3: Organization).
+
+Task: {task_desc}
+
+You have latent information from previous agents.
+
+Document Section {chunk_info}:
+{question}
+
+Instructions:
+- Organize all extracted information logically
+- Resolve any conflicts between different document sections
+- Prepare a comprehensive summary of all findings
+- Focus on: {focus_areas}
+- Write down your detailed organization process. Explain your reasoning explicitly.
+
+Continue organization:
+"""
+    
+    elif role == "judger":
+        # ====== 鏂板锛氬己鍒惰 Judger 浣跨敤鍜屽井璋冩椂涓€妯′竴鏍风殑绯荤粺鎻愮ず璇?======
+        system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+        # =================================================================
+
+        # Get entity list for DocRED
+        entity_list = item.get("entity_list", "")
+        docred_entity_section = ""
+        if dataset == "docred" and entity_list:
+            docred_entity_section = f"""
+Entities (use ONLY these, refer by index [i]):
+{entity_list}
+"""
+        
+        if dataset == "docred":
+            user_prompt = f"""Task: {task_desc}
+
+{docred_entity_section}Document:
+{question}
+
+{output_constraint}
+
+Output the extracted relationships DIRECTLY in JSON format. Do not include any explanations or thinking process.
+
+Format:
+{{"relations": [{{"head_id": 0, "relation": "country", "tail_id": 5}}]}}
+
+Goal: MAXIMUM RECALL. Extract every valid relationship that can be logically inferred from the text. Pay special attention to implicit inter-sentence relations. Do not miss any valid connections, especially for long-tail entities.
+
+Rules:
+- head_id is the SUBJECT entity index (e.g. 0, 1, 2...).
+- tail_id is the OBJECT entity index.
+- relation must be an exact natural-language name from the valid list.
+- ANTI-HALLUCINATION: Do NOT fabricate relations using pure external common sense. Prefer text-grounded inference; implicit cross-sentence relations are valid.
+- INVERSE RELATIONS: If a relation logically implies its inverse (e.g., "parent organization" vs "subsidiary", "contains" vs "located in"), you MUST extract BOTH directions as separate relations if supported by the document text.
+- For companies/organizations, prefer "parent organization" or "subsidiary" over "part of" to match standard annotation guidelines.
+
+Return JSON now:
+/no_think
+"""
+        elif dataset == "chemprot":
+            entity_list = item.get("entity_list", "") if item else ""
+            entity_section = f"\nAnnotated entities (ONLY use these, copy text exactly):\n{entity_list}\n" if entity_list else ""
+            user_prompt = f"""Task: chemical-protein relation extraction.
+{entity_section}
+Rules:
+- "head" MUST be a CHEMICAL entity (copy text exactly from the list).
+- "tail" should be a gene or protein entity from the list when possible (copy text exactly).
+- "relation" MUST be one of: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- Prefer relations explicitly stated in the document; skip borderline or weakly implied cases.
+- If no valid relations exist, output {{"relations": []}}.
+
+Output JSON format:
+{{"relations": [{{"head": "chemical_name", "relation": "RELATION_TYPE", "tail": "gene_name"}}]}}
+
+/no_think
+Document text:
+{question}
+
+Extract and output JSON:
+"""
+        else:
+            user_prompt = f"""Task: {task_desc}
+
+Document:
+{question}
+
+{output_constraint}
+
+Instructions:
+1. Synthesize all findings from previous agents
+2. Output FINAL JSON that fills the extraction schema completely
+
+Output the extracted information as JSON:
+"""
+    elif role == "verifier":
+        system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+        user_prompt = _build_extraction_verifier_prompt(dataset, question, item, template_str)
+    
+    return [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_extraction_prompts_hierarchical(dataset: str, role: str, question: str, item: dict, method=None, args=None):
+    """
+    Unified extraction prompts for DocRED/CORD/FUNSD/ChemProt datasets (Hierarchical mode).
+    """
+    import json
+    
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a document information extraction specialist."
+    
+    assert method in ["latent_mas"], "this prompt only for latent_mas method"
+    assert "qwen" in args.model_name.lower(), "this prompt only for qwen models"
+    
+    template = json.loads(item.get("extract_template", "{}"))
+    template_str = json.dumps(template, ensure_ascii=False, indent=2)
+    partition_info = item.get("partition_info", "")
+    entity_list = item.get("entity_list", "")
+    entity_list = item.get("entity_list", "")
+    entity_list = item.get("entity_list", "")
+    entity_list = item.get("entity_list", "")
+    
+    # Dataset-specific instructions
+    if dataset == "docred":
+        task_desc = "document-level relation extraction using entity indices and natural-language relation names"
+        focus_areas = "named entities and their relationships"
+        rel_names_list = ", ".join(f'"{name}"' for name in DOCRED_REL_MAP.values())
+        output_constraint = f"Valid relation names: {rel_names_list}\nUse EXACT relation name strings. Use head_id/tail_id (integer indices from the entity list) instead of entity names."
+    
+    elif dataset == "cord":
+        task_desc = "receipt/invoice information extraction into a strictly nested JSON structure"
+        focus_areas = "menu items (nm, cnt, price) and total summary (total_price, cashprice, changeprice, subtotal_price, tax_price)"
+        output_constraint = f"""Output JSON format MUST EXACTLY MATCH this schema:
+{template_str}
+
+Rules:
+- Use EXACT keys: "nm", "cnt", "price" inside the "menu" array.
+- Use EXACT keys: "total_price", "cashprice", "changeprice", "subtotal_price", "tax_price" inside the "total" dict.
+- Missing values MUST be empty strings ""."""
+    
+    elif dataset == "funsd":
+        task_desc = "form understanding and key-value extraction"
+        focus_areas = "form entities (questions, answers, headers, other text) and their linking relationships"
+        output_constraint = f"""Output JSON format MUST EXACTLY MATCH this schema:
+{template_str}
+
+Rules:
+- Every entity MUST have a unique integer "id".
+- Use EXACT labels: "question", "answer", "header", "other".
+- Relations MUST link entities using their integer "id" for "head" and "tail", with type "linked"."""
+    
+    elif dataset == "chemprot":
+        task_desc = "chemical-protein relation extraction."
+        focus_areas = "chemical compounds, genes/proteins, and their interaction relations"
+        output_constraint = """Output JSON format MUST EXACTLY MATCH this schema:
+{"relations": [{"head": "chemical_name", "relation": "ACTIVATOR", "tail": "protein_name"}]}
+
+Rules:
+- "head" MUST be the chemical compound.
+- "tail" MUST be the gene or protein.
+- "relation" MUST be one of the following exact interaction types: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- If no relations exist in the text, output {"relations": []}."""
+    
+    else:
+        task_desc = "document extraction"
+        focus_areas = "key information"
+        output_constraint = "Fill all schema fields with extracted information."
+    
+    if dataset == "chemprot":
+        entity_section = f"\nAnnotated entities:\n{entity_list}\n" if entity_list else ""
+
+        if role == "planner":
+            user_prompt = f"""You are ChemProt Reader 1.
+
+Task: {task_desc}
+{entity_section}
+Document:
+{question}
+
+Instructions:
+- Extract explicit candidate CHEMICAL-GENE-Y pairs only.
+- Do NOT output relation labels.
+- Do NOT include GENE-N tails.
+- Keep the output short.
+- One candidate per line.
+- Do not explain.
+
+Format:
+- chemical | gene
+
+/no_think"""
+        elif role == "critic":
+            user_prompt = f"""You are ChemProt Reader 2.
+
+Task: {task_desc}
+{entity_section}
+Document:
+{question}
+
+Other findings:
+{context}
+
+Instructions:
+- Validate or reject candidate pairs.
+- Keep only explicit, text-grounded CHEMICAL-GENE-Y pairs.
+- Do not explain.
+
+Format:
+- chemical | gene
+
+/no_think"""
+        elif role == "refiner":
+            user_prompt = f"""You are ChemProt Reader 3.
+
+Task: {task_desc}
+{entity_section}
+Document:
+{question}
+
+All Previous Findings:
+{context}
+
+Instructions:
+- Deduplicate and consolidate only valid CHEMICAL-GENE-Y pairs.
+- Do NOT invent relation labels.
+- Keep the output short.
+- Do not explain.
+
+Format:
+- chemical | gene
+
+/no_think"""
+        elif role == "judger":
+            entity_section = f"\nAnnotated entities (ONLY use these, copy text exactly):\n{entity_list}\n" if entity_list else ""
+            user_prompt = f"""Task: chemical-protein relation extraction.
+{entity_section}
+Rules:
+- "head" MUST be a CHEMICAL entity (copy text exactly from the list).
+- "tail" MUST be a GENE-Y entity only 鈥?do NOT use GENE-N entities as tail (copy text exactly from the list).
+- "relation" MUST be one of: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- Only extract relations explicitly stated in the document. Do not infer.
+- If no valid relations exist, output {{"relations": []}}.
+- Output valid JSON only. Do not include explanations.
+
+Output JSON format:
+{{"relations": [{{"head": "chemical_name", "relation": "RELATION_TYPE", "tail": "gene_name"}}]}}
+
+Previous agents found:
+{context}
+
+Document text:
+{question}
+
+Extract and output JSON:
+/no_think"""
+        elif role == "verifier":
+            system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+            user_prompt = _build_extraction_verifier_prompt(dataset, question, item, template_str)
+    elif role == "planner":
+        user_prompt = f"""You are Document Partition Reader 1.
+
+Task: {task_desc}
+
+Your assigned: {partition_info}
+
+Document Content:
+{question}
+
+Instructions:
+- Extract ALL {focus_areas} from this partition only
+- Be thorough and accurate
+- Write down your detailed step-by-step analysis and findings. Explain your reasoning explicitly.
+
+Partition 1 extraction:
+"""
+    
+    elif role == "critic":
+        user_prompt = f"""You are Document Partition Reader 2.
+
+Task: {task_desc}
+
+Your assigned: {partition_info}
+
+Document Content:
+{question}
+
+Instructions:
+- Extract ALL {focus_areas} from this partition only
+- Be thorough and accurate
+- Write down your detailed step-by-step analysis and findings. Explain your reasoning explicitly.
+
+Partition 2 extraction:
+"""
+    
+    elif role == "refiner":
+        user_prompt = f"""You are Document Partition Reader 3.
+
+Task: {task_desc}
+
+Your assigned: {partition_info}
+
+Document Content:
+{question}
+
+Instructions:
+- Extract ALL {focus_areas} from this partition only
+- Be thorough and accurate
+- Write down your detailed step-by-step analysis and findings. Explain your reasoning explicitly.
+
+Partition 3 extraction:
+"""
+    
+    elif role == "judger":
+        # ====== 鏂板锛氬己鍒惰 Judger 浣跨敤鍜屽井璋冩椂涓€妯′竴鏍风殑绯荤粺鎻愮ず璇?======
+        system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+        # =================================================================
+
+        # Get entity list for DocRED
+        entity_list = item.get("entity_list", "")
+        
+        if dataset == "docred":
+            docred_entity_section = f"""
+Entities (use ONLY these, refer by index [i]):
+{entity_list}
+"""
+            user_prompt = f"""Task: {task_desc}
+
+{docred_entity_section}Document:
+{question}
+
+{output_constraint}
+
+Output the extracted relationships DIRECTLY in JSON format. Do not include any explanations or thinking process.
+
+Format:
+{{"relations": [{{"head_id": 0, "relation": "country", "tail_id": 5}}]}}
+
+Goal: MAXIMUM RECALL. Extract every valid relationship that can be logically inferred from the text. Pay special attention to implicit inter-sentence relations. Do not miss any valid connections, especially for long-tail entities.
+
+Rules:
+- head_id is the SUBJECT entity index (e.g. 0, 1, 2...).
+- tail_id is the OBJECT entity index.
+- relation must be an exact natural-language name from the valid list.
+- ANTI-HALLUCINATION: Do NOT fabricate relations using pure external common sense. Prefer text-grounded inference; implicit cross-sentence relations are valid.
+- INVERSE RELATIONS: If a relation logically implies its inverse (e.g., "parent organization" vs "subsidiary", "contains" vs "located in"), you MUST extract BOTH directions as separate relations if supported by the document text.
+- For companies/organizations, prefer "parent organization" or "subsidiary" over "part of" to match standard annotation guidelines.
+
+You have latent info from all partitions. Output JSON now:
+/no_think
+"""
+        elif dataset == "funsd":
+            user_prompt = f"""Task: {task_desc}
+
+Document:
+{question}
+
+Output Format:
+{template_str}
+
+Instructions:
+1. Extract ALL form fields, questions, answers, and headers from the document
+2. Identify relationships between questions and answers
+3. Output valid JSON with 'entities' and 'relations' arrays
+
+Entity labels: question, answer, header, other
+
+Output the extracted information as JSON:
+"""
+        elif dataset == "cord":
+            user_prompt = f"""Task: {task_desc}
+
+Document:
+{question}
+
+{output_constraint}
+
+Output Format:
+{template_str}
+
+You have latent info from all partitions. Output the final extraction as JSON:
+"""
+        elif dataset == "chemprot":
+            entity_list = item.get("entity_list", "") if item else ""
+            entity_section = f"\nAnnotated entities (ONLY use these, copy text exactly):\n{entity_list}\n" if entity_list else ""
+            user_prompt = f"""Task: chemical-protein relation extraction.
+{entity_section}
+Rules:
+- "head" MUST be a CHEMICAL entity (copy text exactly from the list).
+- "tail" should be a gene or protein entity from the list when possible (copy text exactly).
+- "relation" MUST be one of: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- Prefer relations explicitly stated in the document; skip borderline or weakly implied cases.
+- If no valid relations exist, output {{"relations": []}}.
+
+Output JSON format:
+{{"relations": [{{"head": "chemical_name", "relation": "RELATION_TYPE", "tail": "gene_name"}}]}}
+
+/no_think
+Document text:
+{question}
+
+Extract and output JSON:
+"""
+        else:
+            user_prompt = f"""Task: {task_desc}
+
+Document:
+{question}
+
+{output_constraint}
+
+Output Format:
+{template_str}
+
+You have latent info from all partitions. Output the final extraction as JSON:
+"""
+    elif role == "verifier":
+        system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+        user_prompt = _build_extraction_verifier_prompt(dataset, question, item, template_str)
+    
+    # Check if item has image (multimodal)
+    if "image" in item and item["image"] is not None:
+        # Multimodal format: image + text
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": [
+                {"type": "image", "image": item["image"]},  # PIL Image object
+                {"type": "text", "text": user_prompt}
+            ]},
+        ]
+    else:
+        # Text-only format
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_prompt},
+        ]
+
+
+def build_multimodal_extraction_message(role: str, image, text_prompt: str, system_message: str = None):
+    """
+    Helper function to build multimodal messages with image and text.
+    Used for vision-language models like Qwen-VL.
+    
+    Args:
+        role: Agent role (planner/critic/refiner/judger)
+        image: PIL Image object
+        text_prompt: Text instruction
+        system_message: System prompt (optional)
+    
+    Returns:
+        List of message dicts in Qwen-VL format
+    """
+    if system_message is None:
+        system_message = "You are Qwen, created by Alibaba Cloud. You are a document information extraction specialist."
+    
+    messages = [{"role": "system", "content": system_message}]
+    
+    if image is not None:
+        # Multimodal: image + text
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": text_prompt}
+            ]
+        })
+    else:
+        # Text-only fallback
+        messages.append({
+            "role": "user",
+            "content": text_prompt
+        })
+    
+    return messages
+
+
+def _build_extraction_verifier_prompt(dataset: str, question: str, item: dict, template_str: str = "{}") -> str:
+    import re
+
+    judger_output = item.get("_judger_output", "{}")
+    judger_output = re.sub(r"<think>.*?</think>", "", judger_output, flags=re.DOTALL).strip()
+    start_idx = judger_output.find("{")
+    end_idx = judger_output.rfind("}")
+    if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
+        judger_output = judger_output[start_idx:end_idx + 1]
+    entity_list = item.get("entity_list", "")
+
+    entity_section = ""
+    if entity_list:
+        entity_section = f"\nEntity List:\n{entity_list}\n"
+
+    if dataset == "chemprot":
+        instruction = """Task: Verify and correct the ChemProt extraction JSON.
+
+Rules:
+- Keep the final output as valid JSON only, using schema {"relations": [{"head": "...", "relation": "...", "tail": "..."}]}.
+- Check that every relation head is a CHEMICAL mention from the source text.
+- Check that every relation tail is a GENE-Y mention from the source text, not a GENE-N mention.
+- relation must be exactly one of: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- Remove unsupported, text-groundless, or duplicated relations.
+- If nothing valid remains, output {"relations": []}."""
+    elif dataset == "docred":
+        rel_names_list = ", ".join(f'"{name}"' for name in DOCRED_REL_MAP.values())
+        instruction = f"""Task: Verify and correct the DocRED extraction JSON.
+
+Rules:
+- Keep the final output as valid JSON only, using schema {{"relations": [{{"head_id": 0, "relation": "country", "tail_id": 5}}]}}.
+- head_id and tail_id must be valid integer indices into the provided entity list.
+- head_id must not equal tail_id.
+- relation must be one of these exact names: {rel_names_list}.
+- Remove unsupported, out-of-range, self-loop, or duplicated relations.
+- Do not invent relations not grounded in the document."""
+    elif dataset == "cord":
+        instruction = f"""Task: Verify and correct the CORD extraction JSON.
+
+Required schema:
+{template_str}
+
+Rules:
+- Output valid JSON only with exactly two top-level keys: "menu" and "total".
+- "menu" must be a list of objects containing exactly keys "nm", "cnt", "price".
+- "total" must contain exactly keys "total_price", "cashprice", "changeprice", "subtotal_price", "tax_price".
+- If any required key is missing, add it with empty string "".
+- Numeric fields must remain strings and should contain only plausible numeric text from the document; if invalid or missing, use "".
+- Remove any extra top-level keys.
+- Be conservative: preserve the judger's existing field values unless they are structurally invalid.
+- Do NOT infer or fill an empty field with a non-empty value unless the original judger JSON is missing the key or has an invalid type/value."""
+    elif dataset == "funsd":
+        instruction = f"""Task: Verify and correct the FUNSD extraction JSON.
+
+Required schema:
+{template_str}
+
+Rules:
+- Output valid JSON only.
+- Every entity must have a unique integer "id".
+- Every entity label must be exactly one of: question, answer, header, other.
+- Every relation head/tail must refer to an existing entity id.
+- Remove or repair invalid entities and relations.
+- Keep relation type consistent with the schema.
+- Be conservative: do NOT rewrite document understanding from scratch.
+- Do NOT add new entities, delete entities, split entities, merge entities, or rewrite entity text unless required to repair invalid JSON/schema.
+- Prefer preserving the judger's entity segmentation and only fixing clearly invalid labels or broken relations."""
+    else:
+        instruction = "Task: Verify and correct the extraction JSON. Output valid JSON only."
+
+    return f"""{instruction}
+{entity_section}
+Source Document:
+{question}
+
+Judger JSON Output:
+{judger_output}
+
+Return the corrected final JSON only. Do not include explanations, analysis, or <think> tags.
+/no_think"""
+
+
+def build_extraction_prompts_text_mas_sequential(dataset: str, role: str, question: str, context: str, item: dict, method=None, args=None):
+    """
+    Text-MAS extraction prompts for document extraction (Sequential mode).
+    Uses explicit text passing between agents.
+    """
+    import json
+    
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a document information extraction specialist."
+    
+    assert method in ["text_mas"], "this prompt only for text_mas method"
+    
+    template = json.loads(item.get("extract_template", "{}"))
+    template_str = json.dumps(template, ensure_ascii=False, indent=2)
+    chunk_info = item.get("chunk_info", "")
+    entity_list = item.get("entity_list", "")
+    
+    # Dataset-specific instructions
+    if dataset == "docred":
+        task_desc = "document-level relation extraction using entity indices and natural-language relation names."
+        focus_areas = "named entities and their relationships"
+        rel_names_list = ", ".join(f'"{name}"' for name in DOCRED_REL_MAP.values())
+        output_constraint = f"Valid relation names: {rel_names_list}\nUse EXACT relation name strings. Use head_id/tail_id (integer indices from the entity list) instead of entity names."
+    elif dataset == "cord":
+        task_desc = "receipt/invoice information extraction into a strictly nested JSON structure."
+        focus_areas = "menu items (nm, cnt, price) and total summary (total_price, cashprice, changeprice, subtotal_price, tax_price)"
+        output_constraint = f"""Output JSON format MUST EXACTLY MATCH this schema:
+{template_str}
+
+Rules:
+- Use EXACT keys: "nm", "cnt", "price" inside the "menu" array.
+- Use EXACT keys: "total_price", "cashprice", "changeprice", "subtotal_price", "tax_price" inside the "total" dict.
+- Missing values MUST be empty strings ""."""
+    elif dataset == "funsd":
+        task_desc = "form understanding and key-value extraction"
+        focus_areas = "form entities (questions, answers, headers, other text) and their linking relationships"
+        output_constraint = f"""Output JSON format MUST EXACTLY MATCH this schema:
+{template_str}
+
+Rules:
+- Every entity MUST have a unique integer "id".
+- Use EXACT labels: "question", "answer", "header", "other".
+- Relations MUST link entities using their integer "id" for "head" and "tail", with type "linked"."""
+    elif dataset == "chemprot":
+        task_desc = "chemical-protein relation extraction."
+        focus_areas = "chemical compounds, genes/proteins, and their interaction relations"
+        output_constraint = """Output JSON format MUST EXACTLY MATCH this schema:
+{"relations": [{"head": "chemical_name", "relation": "ACTIVATOR", "tail": "protein_name"}]}
+
+Rules:
+- "head" MUST be the chemical compound.
+- "tail" MUST be the gene or protein.
+- "relation" MUST be one of the following exact interaction types: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- If no relations exist in the text, output {"relations": []}."""
+    else:
+        task_desc = "document information extraction"
+        focus_areas = "key information"
+        output_constraint = "Fill all schema fields."
+    
+    if dataset == "chemprot":
+        entity_section = f"\nAnnotated entities:\n{entity_list}\n" if entity_list else ""
+
+        if role == "planner":
+            user_prompt = f"""You are a ChemProt Scanner Agent.
+
+Task: {task_desc}
+{entity_section}
+Document:
+{question}
+
+Instructions:
+1. Identify explicit CHEMICAL-GENE-Y candidate pairs only.
+2. Use the annotated entities when provided.
+3. Do NOT output relation labels.
+4. Do NOT include GENE-N tails.
+5. Keep only text-grounded candidates.
+6. Do NOT repeat any candidate.
+7. If no valid candidate exists, output NONE.
+8. Do not explain.
+
+Format:
+chemical | gene
+
+/no_think"""
+        elif role == "critic":
+            user_prompt = f"""You are a ChemProt Validator Agent.
+
+Task: {task_desc}
+{entity_section}
+Document:
+{question}
+
+Previous Agent's Analysis:
+{context}
+
+Instructions:
+1. Remove unsupported or non-explicit candidates.
+2. Reject invalid heads or any tail that is not GENE-Y.
+3. Keep only validated CHEMICAL-GENE-Y pairs.
+4. Do NOT repeat any candidate.
+5. If nothing valid remains, output NONE.
+6. Do not explain.
+
+Format:
+chemical | gene
+
+/no_think"""
+        elif role == "refiner":
+            user_prompt = f"""You are a ChemProt Organizer Agent.
+
+Task: {task_desc}
+{entity_section}
+Document:
+{question}
+
+Previous Agents' Analysis:
+{context}
+
+Instructions:
+1. Consolidate only valid CHEMICAL-GENE-Y candidate pairs.
+2. Deduplicate repeated candidates.
+3. Do NOT invent relation labels.
+4. If nothing valid remains, output NONE.
+5. Keep only final candidate lines for the judger.
+6. Do not explain.
+
+Format:
+chemical | gene
+
+/no_think"""
+        elif role == "judger":
+            user_prompt = f"""Task: chemical-protein relation extraction.
+{entity_section}
+Rules:
+- "head" MUST be a CHEMICAL entity.
+- "tail" MUST be a gene or protein entity.
+- "relation" MUST be one of: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- Only extract explicit, text-grounded relations.
+- If no valid relations exist, output {{"relations": []}}.
+- Output valid JSON only. Do not include explanations.
+
+Output JSON format:
+{{"relations": [{{"head": "chemical_name", "relation": "RELATION_TYPE", "tail": "gene_name"}}]}}
+
+Previous agents found:
+{context}
+
+Document:
+{question}
+
+Extract and output JSON:
+/no_think"""
+        elif role == "verifier":
+            system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+            user_prompt = _build_extraction_verifier_prompt(dataset, question, item, template_str)
+    elif role == "planner":
+        if dataset == "docred":
+            docred_entity_section = f"""
+Entities (use ONLY these, refer by index [i]):
+{entity_list}
+""" if entity_list else ""
+            user_prompt = f"""You are a DocRED Candidate Scanner Agent.
+
+Task: {task_desc}
+
+{docred_entity_section}Document Section {chunk_info}:
+{question}
+
+Valid relation names:
+{rel_names_list}
+
+Instructions:
+1. Propose only candidate relations whose relation name is copied exactly from the valid list.
+2. Use only entity indices from the entity list: head_id | relation | tail_id.
+3. If a relation type is not in the valid list, write NONE for that candidate instead of inventing a new label.
+4. Do not output JSON, explanations, or free-form relation names.
+
+Format:
+head_id | exact relation name | tail_id
+/no_think
+"""
+        else:
+            user_prompt = f"""You are a Document Scanner Agent.
+
+Task: {task_desc}
+
+Document Section {chunk_info}:
+{question}
+
+Instructions:
+1. Carefully scan the document
+2. Identify all relevant information: {focus_areas}
+3. List all found items with their values
+4. Be thorough - don't miss anything
+
+Output your findings in a structured list format.
+"""
+    
+    elif role == "critic":
+        if dataset == "docred":
+            docred_entity_section = f"""
+Entities (use ONLY these, refer by index [i]):
+{entity_list}
+""" if entity_list else ""
+            user_prompt = f"""You are a DocRED Candidate Validator Agent.
+
+Task: {task_desc}
+
+{docred_entity_section}Document Section {chunk_info}:
+{question}
+
+Valid relation names:
+{rel_names_list}
+
+Previous Agent's Candidate Lines:
+{context}
+
+Instructions:
+1. Keep only candidates grounded in the document.
+2. Keep only candidates whose relation name is copied exactly from the valid list.
+3. Remove out-of-range entity indices, self-loops, duplicates, and invented labels.
+4. Add missing candidates only when the relation name is in the valid list.
+5. Do not output JSON or explanations.
+
+Format:
+head_id | exact relation name | tail_id
+/no_think
+"""
+        else:
+            user_prompt = f"""You are a Document Validator Agent.
+
+Task: {task_desc}
+
+Document Section {chunk_info}:
+{question}
+
+Previous Agent's Analysis:
+{context}
+
+Instructions:
+1. Review the previous agent's findings
+2. Cross-check against the document content
+3. Identify any missing or incorrect information
+4. Add corrections and missing items
+
+Output your verified and corrected findings.
+"""
+    
+    elif role == "refiner":
+        if dataset == "docred":
+            docred_entity_section = f"""
+Entities (use ONLY these, refer by index [i]):
+{entity_list}
+""" if entity_list else ""
+            user_prompt = f"""You are a DocRED Candidate Organizer Agent.
+
+Task: {task_desc}
+
+{docred_entity_section}Document Section {chunk_info}:
+{question}
+
+Valid relation names:
+{rel_names_list}
+
+Previous Agents' Candidate Lines:
+{context}
+
+Instructions:
+1. Consolidate a final deduplicated candidate list.
+2. Keep only lines with exact valid relation names.
+3. Drop any vague, paraphrased, or non-DocRED relation label.
+4. Do not output JSON or explanations.
+
+Format:
+head_id | exact relation name | tail_id
+/no_think
+"""
+        else:
+            user_prompt = f"""You are a Document Organizer Agent.
+
+Task: {task_desc}
+
+Document Section {chunk_info}:
+{question}
+
+Previous Agents' Analysis:
+{context}
+
+Instructions:
+1. Organize all verified information
+2. Resolve any conflicts between findings
+3. Prepare comprehensive summary
+4. Focus on: {focus_areas}
+
+Output the organized, complete list of extracted information.
+"""
+    
+    elif role == "judger":
+        # Get entity list for DocRED
+        docred_entity_section = ""
+        if dataset == "docred" and entity_list:
+            docred_entity_section = f"""
+Entities (use ONLY these):
+{entity_list}
+"""
+
+        if dataset == "docred":
+            system_message = "You are an expert DocRED relation extraction system. Output valid JSON only."
+            user_prompt = f"""Task: {task_desc}
+
+{docred_entity_section}Document:
+{question}
+
+{output_constraint}
+
+Instructions:
+1. Convert the previous candidate lines into the final JSON.
+2. Keep only relation names copied exactly from the valid relation list.
+3. Drop any candidate with a vague, paraphrased, unsupported, or non-DocRED relation label.
+4. Drop out-of-range entity indices, self-loops, and duplicates.
+5. Output FINAL JSON only. Do not include analysis, explanations, or <think> tags.
+
+Format example:
+{{"relations": [{{"head_id": 0, "relation": "country", "tail_id": 5}}]}}
+
+Goal: MAXIMUM RECALL. Extract every valid relationship that can be logically inferred from the text. Pay special attention to implicit inter-sentence relations. Do not miss any valid connections.
+
+Rules:
+- head_id is the SUBJECT entity index (e.g. 0, 1, 2...).
+- tail_id is the OBJECT entity index.
+- relation must be an exact natural-language name from the valid list.
+- ANTI-HALLUCINATION: Do NOT fabricate relations using pure external common sense. Prefer text-grounded inference; implicit cross-sentence relations are valid.
+- INVERSE RELATIONS: If a relation logically implies its inverse, extract BOTH directions.
+
+Previous agents found:
+{context}
+
+Final JSON:
+/no_think
+"""
+        else:
+            # 閽堝 CORD, FUNSD, ChemProt 绛変换鍔＄殑閫氱敤姝ｇ‘杈撳嚭鏍煎紡
+            user_prompt = f"""Task: {task_desc}
+
+Document:
+{question}
+
+{output_constraint}
+
+Instructions:
+1. First, analyze the document and reason about the items based on previous findings (write your thinking)
+2. Then output FINAL JSON EXACTLY matching the required schema.
+
+Previous agents found:
+{context}
+
+Begin your analysis:
+"""
+    elif role == "verifier":
+        system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+        user_prompt = _build_extraction_verifier_prompt(dataset, question, item, template_str)
+    
+    # Check if item has image (multimodal)
+    if "image" in item and item["image"] is not None:
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": [
+                {"type": "image", "image": item["image"]},
+                {"type": "text", "text": user_prompt}
+            ]},
+        ]
+    else:
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_prompt},
+        ]
+
+
+def build_extraction_prompts_text_mas_hierarchical(dataset: str, role: str, question: str, context: str, item: dict, method=None, args=None):
+    """
+    Text-MAS extraction prompts for document extraction (Hierarchical mode).
+    Uses explicit text passing between agents, with parallel partition processing.
+    """
+    import json
+    
+    system_message = "You are Qwen, created by Alibaba Cloud. You are a document information extraction specialist."
+    
+    assert method in ["text_mas"], "this prompt only for text_mas method"
+    
+    template = json.loads(item.get("extract_template", "{}"))
+    template_str = json.dumps(template, ensure_ascii=False, indent=2)
+    partition_info = item.get("partition_info", "")
+    entity_list = item.get("entity_list", "")
+    
+    # Dataset-specific instructions (same as sequential)
+    if dataset == "docred":
+        task_desc = "document-level relation extraction using entity indices and natural-language relation names."
+        focus_areas = "named entities and their relationships"
+        rel_names_list = ", ".join(f'"{name}"' for name in DOCRED_REL_MAP.values())
+        output_constraint = f"Valid relation names: {rel_names_list}\nUse EXACT relation name strings. Use head_id/tail_id (integer indices from the entity list) instead of entity names."
+    elif dataset == "cord":
+        task_desc = "receipt/invoice information extraction into a strictly nested JSON structure."
+        focus_areas = "menu items (nm, cnt, price) and total summary (total_price, cashprice, changeprice, subtotal_price, tax_price)"
+        output_constraint = f"""Output JSON format MUST EXACTLY MATCH this schema:
+{template_str}
+
+Rules:
+- Use EXACT keys: "nm", "cnt", "price" inside the "menu" array.
+- Use EXACT keys: "total_price", "cashprice", "changeprice", "subtotal_price", "tax_price" inside the "total" dict.
+- Missing values MUST be empty strings ""."""
+    elif dataset == "funsd":
+        task_desc = "form understanding and key-value extraction"
+        focus_areas = "form fields (questions, answers, headers)"
+        output_constraint = "Fill entities and relations arrays."
+    elif dataset == "chemprot":
+        task_desc = "chemical-protein relation extraction."
+        focus_areas = "chemical compounds, genes/proteins, and their interaction relations"
+        output_constraint = """Output JSON format MUST EXACTLY MATCH this schema:
+{"relations": [{"head": "chemical_name", "relation": "ACTIVATOR", "tail": "protein_name"}]}
+
+Rules:
+- "head" MUST be the chemical compound.
+- "tail" MUST be the gene or protein.
+- "relation" MUST be one of the following exact interaction types: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- If no relations exist in the text, output {"relations": []}."""
+    else:
+        task_desc = "document information extraction"
+        focus_areas = "key information"
+        output_constraint = "Fill all schema fields."
+    
+    if role == "planner":
+        user_prompt = f"""You are Document Partition Reader 1.
+
+Task: {task_desc}
+
+Your Partition: {partition_info}
+
+Document Content:
+{question}
+
+Instructions:
+1. Extract all relevant information from YOUR partition
+2. Focus on: {focus_areas}
+3. List findings with exact values
+4. Note cross-references to other sections
+
+Your partition findings:
+"""
+    
+    elif role == "critic":
+        user_prompt = f"""You are Document Partition Reader 2.
+
+Task: {task_desc}
+
+Your Partition: {partition_info}
+
+Document Content:
+{question}
+
+Other Partition's Findings:
+{context}
+
+Instructions:
+1. Extract information from YOUR partition
+2. Cross-reference with other partition's findings
+3. Add complementary information
+
+Your partition findings:
+"""
+    
+    elif role == "refiner":
+        user_prompt = f"""You are Document Partition Reader 3.
+
+Task: {task_desc}
+
+Your Partition: {partition_info}
+
+Document Content:
+{question}
+
+All Previous Findings:
+{context}
+
+Instructions:
+1. Extract remaining information from YOUR partition
+2. Merge with previous findings
+3. Resolve any conflicts
+4. Create unified summary
+
+Merged findings:
+"""
+    
+    elif role == "judger":
+        # Get entity list for DocRED
+        docred_entity_section = ""
+        if dataset == "docred" and entity_list:
+            docred_entity_section = f"""
+Entities (use ONLY these):
+{entity_list}
+"""
+        
+        if dataset == "docred":
+            system_message = "You are an expert DocRED relation extraction system. Output valid JSON only."
+            user_prompt = f"""Task: {task_desc}
+
+{docred_entity_section}Document:
+{question}
+
+{output_constraint}
+
+Instructions:
+1. Convert the partition findings into the final JSON.
+2. Keep only relation names copied exactly from the valid relation list.
+3. Drop any candidate with a vague, paraphrased, unsupported, or non-DocRED relation label.
+4. Drop out-of-range entity indices, self-loops, and duplicates.
+5. Output FINAL JSON only. Do not include analysis, explanations, or <think> tags.
+
+Format example:
+{{"relations": [{{"head_id": 0, "relation": "country", "tail_id": 5}}]}}
+
+Goal: MAXIMUM RECALL. Extract every valid relationship that can be logically inferred from the text. Pay special attention to implicit inter-sentence relations. Do not miss any valid connections.
+
+Rules:
+- head_id is the SUBJECT entity index (e.g. 0, 1, 2...).
+- tail_id is the OBJECT entity index.
+- relation must be an exact natural-language name from the valid list.
+- ANTI-HALLUCINATION: Do NOT fabricate relations using pure external common sense. Prefer text-grounded inference; implicit cross-sentence relations are valid.
+- INVERSE RELATIONS: If a relation logically implies its inverse, extract BOTH directions.
+
+Partition findings:
+{context}
+
+Final JSON:
+/no_think
+"""
+        else:
+            user_prompt = f"""Task: {task_desc}
+
+Document:
+{question}
+
+{output_constraint}
+
+Instructions:
+1. First, analyze the document and reason about the items based on previous partition findings (write your thinking)
+2. Then output FINAL JSON EXACTLY matching the required schema.
+
+Partition findings:
+{context}
+
+Begin your analysis:
+"""
+    elif role == "verifier":
+        system_message = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+        user_prompt = _build_extraction_verifier_prompt(dataset, question, item, template_str)
+    
+    # Check if item has image (multimodal)
+    if "image" in item and item["image"] is not None:
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": [
+                {"type": "image", "image": item["image"]},
+                {"type": "text", "text": user_prompt}
+            ]},
+        ]
+    else:
+        return [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_prompt},
+        ]
+
+
+# ============= LoRA Fine-tuned Model Prompts =============
+# 杩欎簺prompts涓巉inetune_lora.py涓殑璁粌鏍煎紡瀹屽叏涓€鑷?
+# 甯哥敤DocRED鍏崇郴(绠€鍖栫増,涓嶉渶瑕佸垪鍑哄叏閮?6涓?
+DOCRED_COMMON_RELATIONS = """Common relations:
+P17(country), P131(located in), P27(citizenship), P569(birth date), P570(death date), 
+P19(birthplace), P20(death place), P69(educated at), P108(employer), P102(political party), 
+P40(child), P26(spouse), P22(father), P25(mother), P3373(sibling), P161(cast member),
+P57(director), P50(author), P175(performer), P264(record label), P495(country of origin),
+P577(publication date), P571(inception), P159(headquarters), P749(parent org), P355(subsidiary)"""
+
+
+def build_lora_extraction_prompt(dataset: str, question: str, item: dict, args=None):
+    """
+    LoRA寰皟妯″瀷涓撶敤prompt - 涓庤缁冩牸寮忓畬鍏ㄤ竴鑷?    鐩存帴杈撳嚭JSON,鏃犻渶澶氳疆agent浜や簰
+    """
+    entity_list = item.get("entity_list", "")
+    
+    system_msg = "You are an expert document information extraction system. Extract structured information accurately and output valid JSON only."
+    
+    if dataset == "docred":
+        # Index extraction with natural-language relation names.
+        rel_names_list = ", ".join(
+            f'"{name}"' for name in DOCRED_REL_MAP.values()
+        )
+        instruction = f"""Task: Document-level relation extraction.
+
+Entities in this document:
+{entity_list}
+
+Extract relations between entities using their index numbers [i] from the list above.
+Use the exact natural-language relation names below.
+
+Valid relation names: {rel_names_list}
+
+Output JSON format:
+{{"relations": [{{"head_id": 0, "relation": "country", "tail_id": 5}}]}}
+
+Rules:
+1. head_id must be the SUBJECT (the entity performing the action or being described).
+2. tail_id must be the OBJECT (the target entity of the relation).
+3. head_id/tail_id must be integer indices from the entity list above (e.g. 0, 1, 2...).
+4. relation must be one of the valid relation names listed above (use the exact string).
+5. Be conservative: output only relations that are directly supported by an explicit phrase in the document.
+Output the JSON directly with no explanation, analysis, or <think> tags.
+/no_think"""
+    
+    elif dataset == "funsd":
+        instruction = """Task: Extract form fields and their semantic relationships.
+
+Identify form entities and assign each a unique integer "id" (0, 1, 2...).
+Valid labels: question, answer, header, other.
+Be conservative: only include clearly separated text spans. If a small or ambiguous text fragment is hard to classify, omit it.
+Prefer a compact extraction: ignore decorative text, repeated labels, isolated punctuation, and weak header/other candidates unless they are central to the form.
+
+Identify relations:
+- Link questions to their corresponding answers.
+- Use the entity's integer "id" for "head" (the question) and "tail" (the answer).
+- Only add a relation when the question-answer pairing is visually or textually obvious.
+- If multiple answers could match one question, keep only the most direct pair and omit the rest.
+
+Output JSON format:
+{"entities": [{"id": 0, "text": "Name:", "label": "question"}, {"id": 1, "text": "John Smith", "label": "answer"}], "relations": [{"head": 0, "tail": 1, "type": "linked"}]}
+"""
+    
+    elif dataset == "cord":
+        instruction = """Task: Extract receipt/invoice information from OCR text or image into a nested JSON structure.
+
+You must extract information into two main sections:
+1. "menu": A list of purchased items. Each item must be a dictionary containing:
+   - "nm": Name of the item (string)
+   - "cnt": Quantity purchased (string, e.g., "1")
+   - "price": Price of the item (string)
+2. "total": A dictionary containing summary amounts:
+   - "total_price": The final total amount (string)
+   - "cashprice": Cash given by the customer (string, optional)
+   - "changeprice": Change returned (string, optional)
+   - "subtotal_price": Subtotal before tax (string, optional)
+   - "tax_price": Tax amount (string, optional)
+
+Rules:
+- Output valid JSON only.
+- If a field or value is missing in the receipt, use an empty string "".
+- If there are no menu items, output an empty list [] for "menu".
+- Be conservative: omit menu rows whose item name, quantity, or price is unclear.
+- Do not infer missing numeric values from nearby text; use "" instead.
+- Prefer only complete line items with a clear name and price; skip modifiers, discounts, service lines, and partial OCR fragments.
+- Fill optional total fields only when their labels are explicit; otherwise leave them as "".
+
+Output JSON format example:
+{"menu": [{"nm": "EGG TART", "cnt": "1", "price": "13,000"}], "total": {"total_price": "13,000", "cashprice": "15,000", "changeprice": "2,000"}}"""
+    
+    elif dataset == "chemprot":
+        entity_list = item.get("entity_list", "")
+        entity_section = f"\nAnnotated entities (ONLY use these, copy text exactly):\n{entity_list}\n" if entity_list else ""
+        instruction = f"""Task: chemical-protein relation extraction.
+{entity_section}
+Rules:
+- "head" MUST be a CHEMICAL entity (copy text exactly from the list).
+- "tail" MUST be a GENE-Y entity only 鈥?do NOT use GENE-N entities as tail (copy text exactly from the list).
+- "relation" MUST be one of: UPREGULATOR, DOWNREGULATOR, AGONIST, ANTAGONIST, SUBSTRATE.
+- Only extract relations explicitly stated in the document. Do not infer.
+- If no valid relations exist, output {{"relations": []}}.
+
+Output JSON format:
+{{"relations": [{{"head": "chemical_name", "relation": "RELATION_TYPE", "tail": "gene_name"}}]}}
+
+/no_think"""
+    
+    else:
+        instruction = "Task: Extract information from the document."
+    
+    user_content = f"{instruction}\n\nDocument text:\n{question}\n\nExtract and output JSON:"
+    
+    # 妫€鏌ユ槸鍚︽湁鍥惧儚(澶氭ā鎬?
+    if "image" in item and item["image"] is not None:
+        return [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": [
+                {"type": "image", "image": item["image"]},
+                {"type": "text", "text": user_content}
+            ]},
+        ]
+    else:
+        return [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_content},
+        ]
