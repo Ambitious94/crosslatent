@@ -22,7 +22,7 @@ from prompts_latent_crossagent import (
     build_conll04_latent_re_type_prompt,
     build_conll04_text_anchor_prompt,
 )
-from .cross_agent import _clean_entities, _clean_relations, _extract_json
+from .cross_agent import _clean_entities, _clean_relations, _extract_json, _json_items
 
 
 class LatentCrossAgentMethod:
@@ -252,7 +252,7 @@ class LatentCrossAgentMethod:
                 )
                 traces.append(trace)
                 entities_candidate = _clean_entities(
-                    _extract_json(candidate_text).get("entities", []),
+                    _json_items(_extract_json(candidate_text), "entities"),
                     keep_confidence=True,
                 )
                 if entities_candidate:
@@ -291,7 +291,7 @@ class LatentCrossAgentMethod:
             past_key_values=ner_debate_past,
         )
         traces.append(trace)
-        entities = _clean_entities(_extract_json(ner_text).get("entities", []))
+        entities = _clean_entities(_json_items(_extract_json(ner_text), "entities"))
 
         re_type_pasts = []
         for relation_type in CONLL04_RELATION_TYPES:
@@ -305,7 +305,7 @@ class LatentCrossAgentMethod:
                 )
                 traces.append(trace)
                 relations_candidate = _clean_relations(
-                    _extract_json(candidate_text).get("relations", []),
+                    _json_items(_extract_json(candidate_text), "relations"),
                     keep_confidence=True,
                 )
                 if relations_candidate:
@@ -344,7 +344,7 @@ class LatentCrossAgentMethod:
             past_key_values=re_debate_past,
         )
         traces.append(trace)
-        relations = _clean_relations(_extract_json(re_text).get("relations", []))
+        relations = _clean_relations(_json_items(_extract_json(re_text), "relations"))
 
         verifier_past, trace = self._latent_one(
             build_conll04_latent_cross_task_seed_prompt(sentence, entities, relations),
@@ -362,8 +362,8 @@ class LatentCrossAgentMethod:
         traces.append(trace)
 
         final_data = _extract_json(final_text)
-        final_entities = _clean_entities(final_data.get("entities", []))
-        final_relations = _clean_relations(final_data.get("relations", []))
+        final_entities = _clean_entities(_json_items(final_data, "entities"))
+        final_relations = _clean_relations(_json_items(final_data, "relations"))
         if not final_entities:
             final_entities = entities
         if not final_relations:

@@ -35,6 +35,15 @@ def _extract_json(text: str) -> Dict:
         return {}
 
 
+def _json_items(data, key: str) -> List[Dict]:
+    if isinstance(data, dict):
+        value = data.get(key, [])
+        return value if isinstance(value, list) else []
+    if isinstance(data, list):
+        return data
+    return []
+
+
 def _norm_text(value) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
@@ -200,7 +209,7 @@ class CrossAgentMethod:
                 role="ner_type_agent",
             )
             traces.append(trace)
-            ner_candidates.extend(_clean_entities(_extract_json(text).get("entities", []), keep_confidence=True))
+            ner_candidates.extend(_clean_entities(_json_items(_extract_json(text), "entities"), keep_confidence=True))
 
         text, trace = self._generate_one(
             build_conll04_ner_debate_prompt(sentence, ner_candidates),
@@ -208,7 +217,7 @@ class CrossAgentMethod:
             role="ner_debate",
         )
         traces.append(trace)
-        entities = _clean_entities(_extract_json(text).get("entities", []))
+        entities = _clean_entities(_json_items(_extract_json(text), "entities"))
         if not entities:
             entities = _clean_entities(ner_candidates)
 
@@ -220,7 +229,7 @@ class CrossAgentMethod:
                 role="re_type_agent",
             )
             traces.append(trace)
-            re_candidates.extend(_clean_relations(_extract_json(text).get("relations", []), keep_confidence=True))
+            re_candidates.extend(_clean_relations(_json_items(_extract_json(text), "relations"), keep_confidence=True))
 
         text, trace = self._generate_one(
             build_conll04_re_debate_prompt(sentence, re_candidates),
@@ -228,7 +237,7 @@ class CrossAgentMethod:
             role="re_debate",
         )
         traces.append(trace)
-        relations = _clean_relations(_extract_json(text).get("relations", []))
+        relations = _clean_relations(_json_items(_extract_json(text), "relations"))
         if not relations:
             relations = _clean_relations(re_candidates)
 
@@ -239,8 +248,8 @@ class CrossAgentMethod:
         )
         traces.append(trace)
         final_data = _extract_json(text)
-        final_entities = _clean_entities(final_data.get("entities", []))
-        final_relations = _clean_relations(final_data.get("relations", []))
+        final_entities = _clean_entities(_json_items(final_data, "entities"))
+        final_relations = _clean_relations(_json_items(final_data, "relations"))
         if not final_entities:
             final_entities = entities
         if not final_relations:
