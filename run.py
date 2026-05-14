@@ -210,8 +210,8 @@ def main():
     parser.add_argument("--generate_bs", type=int, default=20, help="Batch size for generation")
     parser.add_argument("--text_mas_context_length", type=int, default=-1, help="TextMAS context length limit")
     parser.add_argument("--think", action="store_true", help="Manually add think token in the prompt for LatentMAS")
-    parser.add_argument("--latent_cross_fusion", type=str, choices=["pure", "text_cache"], default="pure",
-                        help="Fusion mode for latent_cross_agent: pure latent KV or text candidate cache + latent KV.")
+    parser.add_argument("--latent_cross_fusion", type=str, choices=["pure", "re_text_cache", "text_cache"], default="pure",
+                        help="Fusion mode for latent_cross_agent: pure latent KV, RE-only text cache, or NER+RE text cache.")
     parser.add_argument("--use_verifier", action="store_true", help="Run an independent verifier agent after judger (extraction tasks only)")
     parser.add_argument("--verifier_without_lora", action="store_true", help="Run verifier with base model only, without loading LoRA weights")
     parser.add_argument("--verifier_device", type=str, default=None, help="Device for the verifier model when loading it separately; defaults to --device2 if set")

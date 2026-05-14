@@ -51,8 +51,8 @@ class LatentCrossAgentMethod:
         self.total_output_tokens = 0
         if generate_bs != 1:
             print("[INFO] latent_cross_agent v1 forces generate_bs=1")
-        if self.fusion_mode not in {"pure", "text_cache"}:
-            raise ValueError("--latent_cross_fusion must be either 'pure' or 'text_cache'")
+        if self.fusion_mode not in {"pure", "re_text_cache", "text_cache"}:
+            raise ValueError("--latent_cross_fusion must be one of: pure, re_text_cache, text_cache")
 
     def _encode_output_tokens(self, text: str):
         encoded = self.model.tokenizer(text, add_special_tokens=False, return_tensors=None)
@@ -251,19 +251,18 @@ class LatentCrossAgentMethod:
                     max_new_tokens=min(self.max_new_tokens, 256),
                 )
                 traces.append(trace)
-                candidates = {
-                    "entities": _clean_entities(
-                        _extract_json(candidate_text).get("entities", []),
-                        keep_confidence=True,
-                    )
-                }
-                anchor_past, trace = self._build_anchor_cache(
-                    kind="NER",
-                    type_name=entity_type,
-                    sentence=sentence,
-                    candidates=candidates,
+                entities_candidate = _clean_entities(
+                    _extract_json(candidate_text).get("entities", []),
+                    keep_confidence=True,
                 )
-                traces.append(trace)
+                if entities_candidate:
+                    anchor_past, trace = self._build_anchor_cache(
+                        kind="NER",
+                        type_name=entity_type,
+                        sentence=sentence,
+                        candidates={"entities": entities_candidate},
+                    )
+                    traces.append(trace)
 
             type_past, trace = self._latent_one(
                 build_conll04_latent_ner_type_prompt(entity_type, sentence),
@@ -297,7 +296,7 @@ class LatentCrossAgentMethod:
         re_type_pasts = []
         for relation_type in CONLL04_RELATION_TYPES:
             anchor_past = None
-            if self.fusion_mode == "text_cache":
+            if self.fusion_mode in {"re_text_cache", "text_cache"}:
                 candidate_text, trace = self._generate_text_candidate(
                     build_conll04_re_type_prompt(relation_type, sentence, entities),
                     name=f"{relation_type}_Text_Candidate_Agent",
@@ -305,19 +304,18 @@ class LatentCrossAgentMethod:
                     max_new_tokens=min(self.max_new_tokens, 384),
                 )
                 traces.append(trace)
-                candidates = {
-                    "relations": _clean_relations(
-                        _extract_json(candidate_text).get("relations", []),
-                        keep_confidence=True,
-                    )
-                }
-                anchor_past, trace = self._build_anchor_cache(
-                    kind="RE",
-                    type_name=relation_type,
-                    sentence=sentence,
-                    candidates=candidates,
+                relations_candidate = _clean_relations(
+                    _extract_json(candidate_text).get("relations", []),
+                    keep_confidence=True,
                 )
-                traces.append(trace)
+                if relations_candidate:
+                    anchor_past, trace = self._build_anchor_cache(
+                        kind="RE",
+                        type_name=relation_type,
+                        sentence=sentence,
+                        candidates={"relations": relations_candidate},
+                    )
+                    traces.append(trace)
 
             type_past, trace = self._latent_one(
                 build_conll04_latent_re_type_prompt(relation_type, sentence, entities),

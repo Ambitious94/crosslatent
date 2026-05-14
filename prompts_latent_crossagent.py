@@ -39,7 +39,7 @@ Sentence:
 Candidate JSON:
 {_json_block(candidates)}
 
-Treat these candidates as reliable but not final evidence.
+Treat these candidates as optional, possibly noisy evidence rather than final truth.
 Encode the candidate entity names, relation triples, labels, and confidence cues for the latent debate reader.
 Do not produce a text answer."""
     return [
