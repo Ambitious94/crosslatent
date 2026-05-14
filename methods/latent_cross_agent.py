@@ -5,7 +5,12 @@ import torch
 
 from models import ModelWrapper, _past_length
 from utils import evaluate_prediction
-from prompts_crossagent import CONLL04_ENTITY_TYPES, CONLL04_RELATION_TYPES
+from prompts_crossagent import (
+    CONLL04_ENTITY_TYPES,
+    CONLL04_RELATION_TYPES,
+    build_conll04_ner_type_prompt,
+    build_conll04_re_type_prompt,
+)
 from prompts_latent_crossagent import (
     build_conll04_latent_cross_task_decode_prompt,
     build_conll04_latent_cross_task_seed_prompt,
@@ -15,6 +20,7 @@ from prompts_latent_crossagent import (
     build_conll04_latent_re_decode_prompt,
     build_conll04_latent_re_read_prompt,
     build_conll04_latent_re_type_prompt,
+    build_conll04_text_anchor_prompt,
 )
 from .cross_agent import _clean_entities, _clean_relations, _extract_json
 
@@ -40,10 +46,13 @@ class LatentCrossAgentMethod:
         self.args = args
         self.task = args.task
         self.method_name = "latent_cross_agent"
+        self.fusion_mode = getattr(args, "latent_cross_fusion", "pure") if args else "pure"
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         if generate_bs != 1:
             print("[INFO] latent_cross_agent v1 forces generate_bs=1")
+        if self.fusion_mode not in {"pure", "text_cache"}:
+            raise ValueError("--latent_cross_fusion must be either 'pure' or 'text_cache'")
 
     def _encode_output_tokens(self, text: str):
         encoded = self.model.tokenizer(text, add_special_tokens=False, return_tensors=None)
@@ -82,6 +91,81 @@ class LatentCrossAgentMethod:
         if right_is_cache:
             return right.__class__.from_legacy_cache(tuple(merged_layers))
         return tuple(merged_layers)
+
+    @torch.no_grad()
+    def _generate_text_candidate(
+        self,
+        messages: List[Dict],
+        *,
+        name: str,
+        role: str,
+        max_new_tokens: int,
+    ):
+        prompts, input_ids, attention_mask, tokens_batch, _ = self._prepare(messages)
+        generated_batch, _ = self.model.generate_text_batch(
+            input_ids,
+            attention_mask,
+            max_new_tokens=max_new_tokens,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            repetition_penalty=1.1,
+        )
+        generated = generated_batch[0].strip()
+        mask = attention_mask[0].bool()
+        trimmed_ids = input_ids[0][mask].to("cpu").tolist()
+        _, output_tokens = self._encode_output_tokens(generated)
+        self.total_input_tokens += len(tokens_batch[0])
+        self.total_output_tokens += len(output_tokens)
+        trace = {
+            "name": name,
+            "role": role,
+            "input": prompts[0],
+            "input_ids": trimmed_ids,
+            "input_tokens": tokens_batch[0],
+            "output": generated,
+        }
+        return generated, trace
+
+    @torch.no_grad()
+    def _build_anchor_cache(
+        self,
+        *,
+        kind: str,
+        type_name: str,
+        sentence: str,
+        candidates,
+    ):
+        messages = build_conll04_text_anchor_prompt(kind, type_name, sentence, candidates)
+        prompts, input_ids, attention_mask, tokens_batch, _ = self._prepare(messages)
+        past = self.model.generate_latent_batch(
+            input_ids,
+            attention_mask=attention_mask,
+            latent_steps=0,
+            past_key_values=None,
+        )
+        mask = attention_mask[0].bool()
+        trimmed_ids = input_ids[0][mask].to("cpu").tolist()
+        self.total_input_tokens += len(tokens_batch[0])
+        trace = {
+            "name": f"{type_name}_Text_Anchor_Cache",
+            "role": f"text_cache_anchor_{kind}",
+            "input": prompts[0],
+            "input_ids": trimmed_ids,
+            "input_tokens": tokens_batch[0],
+            "latent_steps": 0,
+            "latent_tokens_added": _past_length(past),
+            "output": "",
+        }
+        return past, trace
+
+    def _fuse_type_context(
+        self,
+        debate_past: Optional[Tuple],
+        anchor_past: Optional[Tuple],
+        type_past: Optional[Tuple],
+    ):
+        fused = self._concat_past(debate_past, anchor_past)
+        return self._concat_past(fused, type_past)
 
     @torch.no_grad()
     def _latent_one(
@@ -158,18 +242,41 @@ class LatentCrossAgentMethod:
 
         ner_type_pasts = []
         for entity_type in CONLL04_ENTITY_TYPES:
+            anchor_past = None
+            if self.fusion_mode == "text_cache":
+                candidate_text, trace = self._generate_text_candidate(
+                    build_conll04_ner_type_prompt(entity_type, sentence),
+                    name=f"{entity_type}_Text_Candidate_Agent",
+                    role="text_ner_type_agent",
+                    max_new_tokens=min(self.max_new_tokens, 256),
+                )
+                traces.append(trace)
+                candidates = {
+                    "entities": _clean_entities(
+                        _extract_json(candidate_text).get("entities", []),
+                        keep_confidence=True,
+                    )
+                }
+                anchor_past, trace = self._build_anchor_cache(
+                    kind="NER",
+                    type_name=entity_type,
+                    sentence=sentence,
+                    candidates=candidates,
+                )
+                traces.append(trace)
+
             type_past, trace = self._latent_one(
                 build_conll04_latent_ner_type_prompt(entity_type, sentence),
                 name=f"{entity_type}_Latent_Agent",
                 role="latent_ner_type_agent",
                 past_key_values=None,
             )
-            ner_type_pasts.append((entity_type, type_past))
+            ner_type_pasts.append((entity_type, type_past, anchor_past))
             traces.append(trace)
 
         ner_debate_past = None
-        for entity_type, type_past in ner_type_pasts:
-            read_context = self._concat_past(ner_debate_past, type_past)
+        for entity_type, type_past, anchor_past in ner_type_pasts:
+            read_context = self._fuse_type_context(ner_debate_past, anchor_past, type_past)
             ner_debate_past, trace = self._latent_one(
                 build_conll04_latent_ner_read_prompt(entity_type, sentence),
                 name=f"NER_Debate_Read_{entity_type}",
@@ -189,18 +296,41 @@ class LatentCrossAgentMethod:
 
         re_type_pasts = []
         for relation_type in CONLL04_RELATION_TYPES:
+            anchor_past = None
+            if self.fusion_mode == "text_cache":
+                candidate_text, trace = self._generate_text_candidate(
+                    build_conll04_re_type_prompt(relation_type, sentence, entities),
+                    name=f"{relation_type}_Text_Candidate_Agent",
+                    role="text_re_type_agent",
+                    max_new_tokens=min(self.max_new_tokens, 384),
+                )
+                traces.append(trace)
+                candidates = {
+                    "relations": _clean_relations(
+                        _extract_json(candidate_text).get("relations", []),
+                        keep_confidence=True,
+                    )
+                }
+                anchor_past, trace = self._build_anchor_cache(
+                    kind="RE",
+                    type_name=relation_type,
+                    sentence=sentence,
+                    candidates=candidates,
+                )
+                traces.append(trace)
+
             type_past, trace = self._latent_one(
                 build_conll04_latent_re_type_prompt(relation_type, sentence, entities),
                 name=f"{relation_type}_Latent_Agent",
                 role="latent_re_type_agent",
                 past_key_values=None,
             )
-            re_type_pasts.append((relation_type, type_past))
+            re_type_pasts.append((relation_type, type_past, anchor_past))
             traces.append(trace)
 
         re_debate_past = None
-        for relation_type, type_past in re_type_pasts:
-            read_context = self._concat_past(re_debate_past, type_past)
+        for relation_type, type_past, anchor_past in re_type_pasts:
+            read_context = self._fuse_type_context(re_debate_past, anchor_past, type_past)
             re_debate_past, trace = self._latent_one(
                 build_conll04_latent_re_read_prompt(relation_type, sentence, entities),
                 name=f"RE_Debate_Read_{relation_type}",

@@ -30,6 +30,24 @@ Do not produce a text answer. Pass concise latent evidence to the following deba
     ]
 
 
+def build_conll04_text_anchor_prompt(kind: str, type_name: str, sentence: str, candidates):
+    user_prompt = f"""You are reading explicit text candidates from the independent {type_name} {kind} agent.
+
+Sentence:
+{sentence}
+
+Candidate JSON:
+{_json_block(candidates)}
+
+Treat these candidates as reliable but not final evidence.
+Encode the candidate entity names, relation triples, labels, and confidence cues for the latent debate reader.
+Do not produce a text answer."""
+    return [
+        {"role": "system", "content": "You are a CoNLL04 text-cache anchor encoder. Think silently in cache space."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def build_conll04_latent_ner_debate_prompt(sentence: str):
     user_prompt = f"""You are the CoNLL04 NER debate agent.
 
