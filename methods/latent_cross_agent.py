@@ -9,6 +9,7 @@ from prompts_crossagent import (
     CONLL04_ENTITY_TYPES,
     CONLL04_RELATION_TYPES,
     build_conll04_ner_type_prompt,
+    build_conll04_re_debate_prompt,
     build_conll04_re_type_prompt,
 )
 from prompts_latent_crossagent import (
@@ -51,8 +52,8 @@ class LatentCrossAgentMethod:
         self.total_output_tokens = 0
         if generate_bs != 1:
             print("[INFO] latent_cross_agent v1 forces generate_bs=1")
-        if self.fusion_mode not in {"pure", "re_text_cache", "text_cache"}:
-            raise ValueError("--latent_cross_fusion must be one of: pure, re_text_cache, text_cache")
+        if self.fusion_mode not in {"pure", "re_text_cache", "text_cache", "re_c2c"}:
+            raise ValueError("--latent_cross_fusion must be one of: pure, re_text_cache, text_cache, re_c2c")
 
     def _encode_output_tokens(self, text: str):
         encoded = self.model.tokenizer(text, add_special_tokens=False, return_tensors=None)
@@ -102,7 +103,7 @@ class LatentCrossAgentMethod:
         max_new_tokens: int,
     ):
         prompts, input_ids, attention_mask, tokens_batch, _ = self._prepare(messages)
-        generated_batch, _ = self.model.generate_text_batch(
+        generated_batch, text_past = self.model.generate_text_batch(
             input_ids,
             attention_mask,
             max_new_tokens=max_new_tokens,
@@ -124,7 +125,7 @@ class LatentCrossAgentMethod:
             "input_tokens": tokens_batch[0],
             "output": generated,
         }
-        return generated, trace
+        return generated, text_past, trace
 
     @torch.no_grad()
     def _build_anchor_cache(
@@ -244,7 +245,7 @@ class LatentCrossAgentMethod:
         for entity_type in CONLL04_ENTITY_TYPES:
             anchor_past = None
             if self.fusion_mode == "text_cache":
-                candidate_text, trace = self._generate_text_candidate(
+                candidate_text, _, trace = self._generate_text_candidate(
                     build_conll04_ner_type_prompt(entity_type, sentence),
                     name=f"{entity_type}_Text_Candidate_Agent",
                     role="text_ner_type_agent",
@@ -294,10 +295,12 @@ class LatentCrossAgentMethod:
         entities = _clean_entities(_json_items(_extract_json(ner_text), "entities"))
 
         re_type_pasts = []
+        re_text_candidates = []
         for relation_type in CONLL04_RELATION_TYPES:
             anchor_past = None
-            if self.fusion_mode in {"re_text_cache", "text_cache"}:
-                candidate_text, trace = self._generate_text_candidate(
+            text_type_past = None
+            if self.fusion_mode in {"re_text_cache", "text_cache", "re_c2c"}:
+                candidate_text, text_type_past, trace = self._generate_text_candidate(
                     build_conll04_re_type_prompt(relation_type, sentence, entities),
                     name=f"{relation_type}_Text_Candidate_Agent",
                     role="text_re_type_agent",
@@ -308,7 +311,8 @@ class LatentCrossAgentMethod:
                     _json_items(_extract_json(candidate_text), "relations"),
                     keep_confidence=True,
                 )
-                if relations_candidate:
+                re_text_candidates.extend(relations_candidate)
+                if relations_candidate and self.fusion_mode in {"re_text_cache", "text_cache"}:
                     anchor_past, trace = self._build_anchor_cache(
                         kind="RE",
                         type_name=relation_type,
@@ -321,12 +325,23 @@ class LatentCrossAgentMethod:
                 build_conll04_latent_re_type_prompt(relation_type, sentence, entities),
                 name=f"{relation_type}_Latent_Agent",
                 role="latent_re_type_agent",
-                past_key_values=None,
+                past_key_values=text_type_past if self.fusion_mode == "re_c2c" else None,
             )
             re_type_pasts.append((relation_type, type_past, anchor_past))
             traces.append(trace)
 
-        re_debate_past = None
+        text_re_debate_past = None
+        if self.fusion_mode == "re_c2c":
+            text_re_debate_input = _clean_relations(re_text_candidates, keep_confidence=True)
+            _, text_re_debate_past, trace = self._generate_text_candidate(
+                build_conll04_re_debate_prompt(sentence, text_re_debate_input),
+                name="RE_Text_Debate_Agent",
+                role="text_re_debate",
+                max_new_tokens=min(self.max_new_tokens, 512),
+            )
+            traces.append(trace)
+
+        re_debate_past = text_re_debate_past if self.fusion_mode == "re_c2c" else None
         for relation_type, type_past, anchor_past in re_type_pasts:
             read_context = self._fuse_type_context(re_debate_past, anchor_past, type_past)
             re_debate_past, trace = self._latent_one(
