@@ -185,6 +185,35 @@ Output schema:
     ]
 
 
+def build_conll04_latent_re_c2c_decode_prompt(sentence: str, entities):
+    user_prompt = f"""Output the final CoNLL04 relation JSON.
+
+You have cache evidence from:
+1. selected latent relation type agents
+2. a text RE debate agent near the end of the cache
+
+Sentence:
+{sentence}
+
+NER debate result:
+{_json_block(entities)}
+
+Relation definitions and schema:
+{_json_block(RELATION_DEFINITIONS)}
+
+Prioritize schema-compatible relation triples encoded by the text RE debate cache.
+Use latent relation type cache to refine or reject contradictions.
+Return JSON only. If no relation exists, return {{"relations": []}}.
+
+Output schema:
+{{"relations": [{{"head": "head entity text", "relation": "Work_For", "tail": "tail entity text"}}]}}
+/no_think"""
+    return [
+        {"role": "system", "content": "You are a CoNLL04 C2C relation decoder. Output valid JSON only."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def build_conll04_latent_re_debate_prompt(sentence: str, entities):
     user_prompt = f"""You are the CoNLL04 relation debate agent.
 

@@ -19,6 +19,7 @@ from prompts_latent_crossagent import (
     build_conll04_latent_ner_read_prompt,
     build_conll04_latent_ner_type_prompt,
     build_conll04_latent_re_decode_prompt,
+    build_conll04_latent_re_c2c_decode_prompt,
     build_conll04_latent_re_read_prompt,
     build_conll04_latent_re_type_prompt,
     build_conll04_text_anchor_prompt,
@@ -299,6 +300,7 @@ class LatentCrossAgentMethod:
         for relation_type in CONLL04_RELATION_TYPES:
             anchor_past = None
             text_type_past = None
+            relations_candidate = []
             if self.fusion_mode in {"re_text_cache", "text_cache", "re_c2c"}:
                 candidate_text, text_type_past, trace = self._generate_text_candidate(
                     build_conll04_re_type_prompt(relation_type, sentence, entities),
@@ -327,7 +329,7 @@ class LatentCrossAgentMethod:
                 role="latent_re_type_agent",
                 past_key_values=text_type_past if self.fusion_mode == "re_c2c" else None,
             )
-            re_type_pasts.append((relation_type, type_past, anchor_past))
+            re_type_pasts.append((relation_type, type_past, anchor_past, bool(relations_candidate) if self.fusion_mode == "re_c2c" else True))
             traces.append(trace)
 
         text_re_debate_past = None
@@ -341,24 +343,38 @@ class LatentCrossAgentMethod:
             )
             traces.append(trace)
 
-        re_debate_past = text_re_debate_past if self.fusion_mode == "re_c2c" else None
-        for relation_type, type_past, anchor_past in re_type_pasts:
-            read_context = self._fuse_type_context(re_debate_past, anchor_past, type_past)
-            re_debate_past, trace = self._latent_one(
-                build_conll04_latent_re_read_prompt(relation_type, sentence, entities),
-                name=f"RE_Debate_Read_{relation_type}",
-                role="latent_re_debate_reader",
-                past_key_values=read_context,
+        if self.fusion_mode == "re_c2c":
+            selected_type_past = None
+            for _relation_type, type_past, _anchor_past, has_text_candidate in re_type_pasts:
+                if has_text_candidate:
+                    selected_type_past = self._concat_past(selected_type_past, type_past)
+            re_decode_context = self._concat_past(selected_type_past, text_re_debate_past)
+            re_text, trace = self._decode_one(
+                build_conll04_latent_re_c2c_decode_prompt(sentence, entities),
+                name="RE_Latent_C2C_Debate_Agent",
+                role="re_debate",
+                past_key_values=re_decode_context,
             )
             traces.append(trace)
+        else:
+            re_debate_past = None
+            for relation_type, type_past, anchor_past, _has_text_candidate in re_type_pasts:
+                read_context = self._fuse_type_context(re_debate_past, anchor_past, type_past)
+                re_debate_past, trace = self._latent_one(
+                    build_conll04_latent_re_read_prompt(relation_type, sentence, entities),
+                    name=f"RE_Debate_Read_{relation_type}",
+                    role="latent_re_debate_reader",
+                    past_key_values=read_context,
+                )
+                traces.append(trace)
 
-        re_text, trace = self._decode_one(
-            build_conll04_latent_re_decode_prompt(sentence, entities),
-            name="RE_Latent_Debate_Agent",
-            role="re_debate",
-            past_key_values=re_debate_past,
-        )
-        traces.append(trace)
+            re_text, trace = self._decode_one(
+                build_conll04_latent_re_decode_prompt(sentence, entities),
+                name="RE_Latent_Debate_Agent",
+                role="re_debate",
+                past_key_values=re_debate_past,
+            )
+            traces.append(trace)
         relations = _clean_relations(_json_items(_extract_json(re_text), "relations"))
 
         verifier_past, trace = self._latent_one(
