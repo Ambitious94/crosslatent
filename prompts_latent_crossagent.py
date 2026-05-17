@@ -324,7 +324,11 @@ Document:
 Extract only {relation_type} relations.
 Rules:
 - head MUST be a CHEMICAL entity from the list.
-- tail should be a gene/protein entity from the list.
+- tail MUST be a gene/protein entity from the list, preferably GENE-Y rather than GENE-N.
+- The document must explicitly describe this chemical-protein interaction.
+- Do NOT infer a relation from mere co-occurrence, assay context, comparison, speculation, or background knowledge.
+- If evidence is weak, ambiguous, indirect, or could fit multiple relation labels, output {{"relations": []}}.
+- Use confidence >= 0.80 only for relations with strong explicit textual support; otherwise omit the relation.
 - Include confidence from 0.0 to 1.0.
 - Return JSON only. If no relation exists, return {{"relations": []}}.
 
@@ -353,7 +357,10 @@ Candidate relations from relation type agents:
 {_json_block(candidates)}
 
 Use the document, entity list, relation definitions, and confidence scores.
-Remove unsupported, duplicated, wrong-direction, or wrong-schema relations.
+Prioritize precision over recall.
+Keep only candidates with strong explicit textual support and confidence >= 0.80.
+Remove unsupported, weakly implied, co-occurrence-only, duplicated, wrong-direction, wrong-schema, or ambiguous-label relations.
+When candidates conflict or evidence is borderline, reject the relation instead of guessing.
 Return final deduplicated relations as JSON only.
 
 Output schema:
@@ -377,7 +384,8 @@ Annotated entities:
 Document:
 {text}
 
-Read the document and internally identify evidence for {relation_type} only.
+Read the document and internally identify only strong explicit evidence for {relation_type}.
+Ignore co-occurrence-only, weak, indirect, speculative, or ambiguous evidence.
 Do not produce a text answer. Pass concise latent evidence to the following ChemProt relation debate agent."""
     return [
         {"role": "system", "content": "You are a ChemProt latent RE type agent. Think silently in latent space."},
@@ -399,7 +407,8 @@ Annotated entities:
 Document:
 {text}
 
-Internally absorb useful {relation_type} evidence for the final ChemProt decision.
+Internally absorb only strong, explicit {relation_type} evidence for the final ChemProt decision.
+Reject weak, co-occurrence-only, wrong-direction, or ambiguous evidence.
 Do not produce a text answer. Pass updated debate evidence forward in latent space."""
     return [
         {"role": "system", "content": "You are a ChemProt latent RE debate reader. Think silently in latent space."},
@@ -420,6 +429,12 @@ Annotated entities:
 
 Document:
 {text}
+
+Rules:
+- Prioritize precision over recall.
+- Keep only strong explicit chemical-protein interactions.
+- Do not output co-occurrence-only, weakly implied, wrong-direction, or ambiguous-label relations.
+- If uncertain, output {{"relations": []}}.
 
 Return JSON only. If no relation exists, return {{"relations": []}}.
 
@@ -448,8 +463,10 @@ Annotated entities:
 Document:
 {text}
 
-Prioritize schema-compatible relation triples encoded by the text debate cache.
+Prioritize precision over recall.
+Use schema-compatible relation triples encoded by the text debate cache only when they have strong explicit support.
 Use latent relation type cache to refine or reject contradictions.
+Reject co-occurrence-only, weakly implied, wrong-direction, or ambiguous-label relations.
 Return JSON only. If no relation exists, return {{"relations": []}}.
 
 Output schema:
@@ -476,7 +493,9 @@ Document:
 RE debate result:
 {_json_block(relations)}
 
-Internally verify support, direction, and schema. Do not produce text."""
+Internally verify support, direction, and schema.
+Prefer rejecting weak or ambiguous relations over keeping false positives.
+Do not produce text."""
     return [
         {"role": "system", "content": "You are a ChemProt latent verifier. Think silently in latent space."},
         {"role": "user", "content": user_prompt},
@@ -499,6 +518,11 @@ Document:
 
 RE debate result:
 {_json_block(relations)}
+
+Rules:
+- Keep only relations with strong explicit textual support.
+- Remove co-occurrence-only, weakly implied, wrong-direction, wrong-schema, duplicated, or ambiguous-label relations.
+- If uncertain, output {{"relations": []}}.
 
 Return final JSON only. Do not include explanations or <think> tags.
 

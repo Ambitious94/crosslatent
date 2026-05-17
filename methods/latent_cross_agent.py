@@ -262,6 +262,12 @@ class LatentCrossAgentMethod:
             head = str(rel.get("head") or rel.get("subject") or rel.get("h") or "").strip()
             tail = str(rel.get("tail") or rel.get("object") or rel.get("t") or "").strip()
             relation = str(rel.get("relation") or rel.get("type") or rel.get("label") or "").strip().upper()
+            if keep_confidence and "confidence" in rel:
+                try:
+                    if float(rel.get("confidence")) < 0.8:
+                        continue
+                except Exception:
+                    continue
             if relation not in valid or not head or not tail:
                 continue
             head_meta = by_text.get(head.lower())

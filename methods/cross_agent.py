@@ -150,6 +150,12 @@ def _clean_chemprot_relations(relations: List[Dict], entities_meta=None, keep_co
         head = _norm_text(rel.get("head") or rel.get("subject") or rel.get("h"))
         tail = _norm_text(rel.get("tail") or rel.get("object") or rel.get("t"))
         relation = str(rel.get("relation") or rel.get("type") or rel.get("label") or "").strip().upper()
+        if keep_confidence and "confidence" in rel:
+            try:
+                if float(rel.get("confidence")) < 0.8:
+                    continue
+            except Exception:
+                continue
         if relation not in valid or not head or not tail:
             continue
         head = canonical.get(head.lower(), head)
