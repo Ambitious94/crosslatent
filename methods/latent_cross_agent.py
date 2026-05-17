@@ -13,6 +13,7 @@ from prompts_crossagent import (
     build_conll04_re_type_prompt,
 )
 from prompts_latent_crossagent import (
+    CHEMPROT_RELATION_TYPES,
     build_conll04_latent_cross_task_decode_prompt,
     build_conll04_latent_cross_task_seed_prompt,
     build_conll04_latent_ner_decode_prompt,
@@ -23,6 +24,14 @@ from prompts_latent_crossagent import (
     build_conll04_latent_re_read_prompt,
     build_conll04_latent_re_type_prompt,
     build_conll04_text_anchor_prompt,
+    build_chemprot_latent_final_decode_prompt,
+    build_chemprot_latent_re_c2c_decode_prompt,
+    build_chemprot_latent_re_decode_prompt,
+    build_chemprot_latent_re_read_prompt,
+    build_chemprot_latent_re_type_prompt,
+    build_chemprot_latent_verifier_seed_prompt,
+    build_chemprot_text_re_debate_prompt,
+    build_chemprot_text_re_type_prompt,
 )
 from .cross_agent import _clean_entities, _clean_relations, _extract_json, _json_items
 
@@ -238,6 +247,42 @@ class LatentCrossAgentMethod:
         }
         return generated, trace
 
+    def _clean_chemprot_relations(self, relations: List[Dict], keep_confidence: bool = False) -> List[Dict]:
+        valid = set(CHEMPROT_RELATION_TYPES)
+        by_text = {
+            str(e.get("text", "")).strip().lower(): e
+            for e in getattr(self, "_current_entities_meta", [])
+            if isinstance(e, dict)
+        }
+        cleaned = []
+        seen = set()
+        for rel in relations or []:
+            if not isinstance(rel, dict):
+                continue
+            head = str(rel.get("head") or rel.get("subject") or rel.get("h") or "").strip()
+            tail = str(rel.get("tail") or rel.get("object") or rel.get("t") or "").strip()
+            relation = str(rel.get("relation") or rel.get("type") or rel.get("label") or "").strip().upper()
+            if relation not in valid or not head or not tail:
+                continue
+            head_meta = by_text.get(head.lower())
+            tail_meta = by_text.get(tail.lower())
+            if head_meta:
+                head = str(head_meta.get("text", head)).strip()
+            if tail_meta:
+                tail = str(tail_meta.get("text", tail)).strip()
+            key = (head.lower(), relation, tail.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            item = {"head": head, "relation": relation, "tail": tail}
+            if keep_confidence and "confidence" in rel:
+                try:
+                    item["confidence"] = float(rel.get("confidence"))
+                except Exception:
+                    pass
+            cleaned.append(item)
+        return cleaned
+
     def _run_item_conll04(self, item: Dict) -> Dict:
         sentence = item["question"]
         traces = []
@@ -415,13 +460,127 @@ class LatentCrossAgentMethod:
             "correct": eval_result["correct"],
         }
 
+    def _run_item_chemprot(self, item: Dict) -> Dict:
+        text = item["question"]
+        entity_list = item.get("entity_list", "")
+        traces = []
+        self._current_entities_meta = item.get("entities_meta", [])
+
+        relation_type_pasts = []
+        text_candidates = []
+        for relation_type in CHEMPROT_RELATION_TYPES:
+            text_type_past = None
+            relations_candidate = []
+            if self.fusion_mode in {"re_text_cache", "text_cache", "re_c2c"}:
+                candidate_text, text_type_past, trace = self._generate_text_candidate(
+                    build_chemprot_text_re_type_prompt(relation_type, text, entity_list),
+                    name=f"{relation_type}_Text_Candidate_Agent",
+                    role="text_re_type_agent",
+                    max_new_tokens=min(self.max_new_tokens, 384),
+                )
+                traces.append(trace)
+                relations_candidate = self._clean_chemprot_relations(
+                    _json_items(_extract_json(candidate_text), "relations"),
+                    keep_confidence=True,
+                )
+                text_candidates.extend(relations_candidate)
+
+            type_past, trace = self._latent_one(
+                build_chemprot_latent_re_type_prompt(relation_type, text, entity_list),
+                name=f"{relation_type}_Latent_Agent",
+                role="latent_re_type_agent",
+                past_key_values=text_type_past if self.fusion_mode == "re_c2c" else None,
+            )
+            relation_type_pasts.append(
+                (relation_type, type_past, bool(relations_candidate) if self.fusion_mode == "re_c2c" else True)
+            )
+            traces.append(trace)
+
+        text_debate_past = None
+        if self.fusion_mode == "re_c2c":
+            text_debate_input = self._clean_chemprot_relations(text_candidates, keep_confidence=True)
+            _, text_debate_past, trace = self._generate_text_candidate(
+                build_chemprot_text_re_debate_prompt(text, entity_list, text_debate_input),
+                name="ChemProt_Text_Debate_Agent",
+                role="text_re_debate",
+                max_new_tokens=min(self.max_new_tokens, 512),
+            )
+            traces.append(trace)
+
+        if self.fusion_mode == "re_c2c":
+            selected_type_past = None
+            for _relation_type, type_past, has_text_candidate in relation_type_pasts:
+                if has_text_candidate:
+                    selected_type_past = self._concat_past(selected_type_past, type_past)
+            decode_context = self._concat_past(selected_type_past, text_debate_past)
+            re_text, trace = self._decode_one(
+                build_chemprot_latent_re_c2c_decode_prompt(text, entity_list),
+                name="ChemProt_Latent_C2C_Debate_Agent",
+                role="re_debate",
+                past_key_values=decode_context,
+            )
+            traces.append(trace)
+        else:
+            debate_past = None
+            for relation_type, type_past, _has_text_candidate in relation_type_pasts:
+                debate_past, trace = self._latent_one(
+                    build_chemprot_latent_re_read_prompt(relation_type, text, entity_list),
+                    name=f"ChemProt_Debate_Read_{relation_type}",
+                    role="latent_re_debate_reader",
+                    past_key_values=self._concat_past(debate_past, type_past),
+                )
+                traces.append(trace)
+            re_text, trace = self._decode_one(
+                build_chemprot_latent_re_decode_prompt(text, entity_list),
+                name="ChemProt_Latent_Debate_Agent",
+                role="re_debate",
+                past_key_values=debate_past,
+            )
+            traces.append(trace)
+
+        relations = self._clean_chemprot_relations(_json_items(_extract_json(re_text), "relations"))
+
+        verifier_past, trace = self._latent_one(
+            build_chemprot_latent_verifier_seed_prompt(text, entity_list, relations),
+            name="ChemProt_Latent_Verifier",
+            role="latent_relation_verifier",
+            past_key_values=None,
+        )
+        traces.append(trace)
+        final_text, trace = self._decode_one(
+            build_chemprot_latent_final_decode_prompt(text, entity_list, relations),
+            name="ChemProt_Final_Decoder",
+            role="relation_verifier",
+            past_key_values=verifier_past,
+        )
+        traces.append(trace)
+
+        final_relations = self._clean_chemprot_relations(_json_items(_extract_json(final_text), "relations"))
+        if not final_relations:
+            final_relations = relations
+
+        cleaned_text = json.dumps({"relations": final_relations}, ensure_ascii=False)
+        eval_result = evaluate_prediction(self.task, cleaned_text, item, 0)
+        return {
+            "question": text,
+            "gold": eval_result["gold"],
+            "solution": item["solution"],
+            "prediction": eval_result["prediction"],
+            "raw_prediction": final_text,
+            "agents": traces,
+            "correct": eval_result["correct"],
+            "entities_meta": item.get("entities_meta", []),
+        }
+
     def run_batch(self, items: List[Dict]) -> List[Dict]:
-        if self.task != "conll04":
-            raise ValueError("latent_cross_agent currently supports only --task conll04")
+        if self.task not in {"conll04", "chemprot"}:
+            raise ValueError("latent_cross_agent currently supports only --task conll04 or chemprot")
         if getattr(self.args, "use_vllm", False):
             raise ValueError("latent_cross_agent v1 supports HF backend only")
         if len(items) != 1:
             raise ValueError("latent_cross_agent v1 requires generate_bs=1")
+        if self.task == "chemprot":
+            return [self._run_item_chemprot(items[0])]
         return [self._run_item_conll04(items[0])]
 
     def run_item(self, item: Dict) -> Dict:

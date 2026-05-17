@@ -13,6 +13,12 @@ from prompts_crossagent import (
     build_conll04_re_debate_prompt,
     build_conll04_re_type_prompt,
 )
+from prompts_latent_crossagent import (
+    CHEMPROT_RELATION_TYPES,
+    build_chemprot_latent_final_decode_prompt,
+    build_chemprot_text_re_debate_prompt,
+    build_chemprot_text_re_type_prompt,
+)
 
 
 def _extract_json(text: str) -> Dict:
@@ -115,6 +121,39 @@ def _clean_relations(relations: List[Dict], keep_confidence: bool = False) -> Li
         relation = _norm_relation(rel.get("relation") or rel.get("type") or rel.get("label"))
         if not head or not tail or relation not in CONLL04_RELATION_TYPES:
             continue
+        key = (head.lower(), relation, tail.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        item = {"head": head, "relation": relation, "tail": tail}
+        if keep_confidence and "confidence" in rel:
+            try:
+                item["confidence"] = float(rel.get("confidence"))
+            except Exception:
+                pass
+        cleaned.append(item)
+    return cleaned
+
+
+def _clean_chemprot_relations(relations: List[Dict], entities_meta=None, keep_confidence: bool = False) -> List[Dict]:
+    valid = set(CHEMPROT_RELATION_TYPES)
+    canonical = {
+        str(e.get("text", "")).strip().lower(): str(e.get("text", "")).strip()
+        for e in (entities_meta or [])
+        if isinstance(e, dict) and str(e.get("text", "")).strip()
+    }
+    cleaned = []
+    seen = set()
+    for rel in relations or []:
+        if not isinstance(rel, dict):
+            continue
+        head = _norm_text(rel.get("head") or rel.get("subject") or rel.get("h"))
+        tail = _norm_text(rel.get("tail") or rel.get("object") or rel.get("t"))
+        relation = str(rel.get("relation") or rel.get("type") or rel.get("label") or "").strip().upper()
+        if relation not in valid or not head or not tail:
+            continue
+        head = canonical.get(head.lower(), head)
+        tail = canonical.get(tail.lower(), tail)
         key = (head.lower(), relation, tail.lower())
         if key in seen:
             continue
@@ -270,11 +309,74 @@ class CrossAgentMethod:
             "correct": eval_result["correct"],
         }
 
+    def _run_item_chemprot(self, item: Dict) -> Dict:
+        text = item["question"]
+        entity_list = item.get("entity_list", "")
+        entities_meta = item.get("entities_meta", [])
+        traces = []
+
+        re_candidates = []
+        for relation_type in CHEMPROT_RELATION_TYPES:
+            output, trace = self._generate_one(
+                build_chemprot_text_re_type_prompt(relation_type, text, entity_list),
+                name=f"{relation_type}_Agent",
+                role="re_type_agent",
+            )
+            traces.append(trace)
+            re_candidates.extend(
+                _clean_chemprot_relations(
+                    _json_items(_extract_json(output), "relations"),
+                    entities_meta=entities_meta,
+                    keep_confidence=True,
+                )
+            )
+
+        output, trace = self._generate_one(
+            build_chemprot_text_re_debate_prompt(text, entity_list, re_candidates),
+            name="ChemProt_RE_Debate_Agent",
+            role="re_debate",
+        )
+        traces.append(trace)
+        relations = _clean_chemprot_relations(
+            _json_items(_extract_json(output), "relations"),
+            entities_meta=entities_meta,
+        )
+        if not relations:
+            relations = _clean_chemprot_relations(re_candidates, entities_meta=entities_meta)
+
+        output, trace = self._generate_one(
+            build_chemprot_latent_final_decode_prompt(text, entity_list, relations),
+            name="ChemProt_Final_Verifier",
+            role="relation_verifier",
+        )
+        traces.append(trace)
+        final_relations = _clean_chemprot_relations(
+            _json_items(_extract_json(output), "relations"),
+            entities_meta=entities_meta,
+        )
+        if not final_relations:
+            final_relations = relations
+
+        cleaned_text = json.dumps({"relations": final_relations}, ensure_ascii=False)
+        eval_result = evaluate_prediction(self.task, cleaned_text, item, 0)
+        return {
+            "question": text,
+            "gold": eval_result["gold"],
+            "solution": item["solution"],
+            "prediction": eval_result["prediction"],
+            "raw_prediction": output,
+            "agents": traces,
+            "correct": eval_result["correct"],
+            "entities_meta": entities_meta,
+        }
+
     def run_batch(self, items: List[Dict]) -> List[Dict]:
         if len(items) > self.generate_bs:
             raise ValueError("Batch size exceeds configured generate_bs")
-        if self.task != "conll04":
-            raise ValueError("cross_agent currently supports only --task conll04")
+        if self.task not in {"conll04", "chemprot"}:
+            raise ValueError("cross_agent currently supports only --task conll04 or chemprot")
+        if self.task == "chemprot":
+            return [self._run_item_chemprot(item) for item in items]
         return [self._run_item_conll04(item) for item in items]
 
     def run_item(self, item: Dict) -> Dict:

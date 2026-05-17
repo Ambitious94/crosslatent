@@ -8,6 +8,17 @@ from prompts_crossagent import (
 )
 
 
+CHEMPROT_RELATION_TYPES = ["UPREGULATOR", "DOWNREGULATOR", "AGONIST", "ANTAGONIST", "SUBSTRATE"]
+
+CHEMPROT_RELATION_DEFINITIONS = {
+    "UPREGULATOR": "A chemical increases, activates, induces, stimulates, or up-regulates a gene/protein.",
+    "DOWNREGULATOR": "A chemical decreases, inhibits, suppresses, blocks, or down-regulates a gene/protein.",
+    "AGONIST": "A chemical acts as an agonist of a receptor or protein target.",
+    "ANTAGONIST": "A chemical acts as an antagonist or blocker of a receptor or protein target.",
+    "SUBSTRATE": "A chemical is a substrate of an enzyme or protein.",
+}
+
+
 def _json_block(value) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
@@ -294,5 +305,207 @@ Output schema:
 /no_think"""
     return [
         {"role": "system", "content": "You are an expert CoNLL04 extraction decoder. Output valid JSON only."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_text_re_type_prompt(relation_type: str, text: str, entity_list: str):
+    user_prompt = f"""You are the {relation_type} relation type agent for ChemProt.
+
+Relation definition:
+{relation_type}: {CHEMPROT_RELATION_DEFINITIONS[relation_type]}
+
+Annotated entities (ONLY use these, copy text exactly):
+{entity_list}
+
+Document:
+{text}
+
+Extract only {relation_type} relations.
+Rules:
+- head MUST be a CHEMICAL entity from the list.
+- tail should be a gene/protein entity from the list.
+- Include confidence from 0.0 to 1.0.
+- Return JSON only. If no relation exists, return {{"relations": []}}.
+
+Output schema:
+{{"relations": [{{"head": "chemical_name", "relation": "{relation_type}", "tail": "protein_name", "confidence": 0.0}}]}}
+/no_think"""
+    return [
+        {"role": "system", "content": "You are a precise ChemProt relation extraction type agent. Output valid JSON only."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_text_re_debate_prompt(text: str, entity_list: str, candidates):
+    user_prompt = f"""Resolve ChemProt relation type conflicts.
+
+Valid relations:
+{_json_block(CHEMPROT_RELATION_DEFINITIONS)}
+
+Annotated entities:
+{entity_list}
+
+Document:
+{text}
+
+Candidate relations from relation type agents:
+{_json_block(candidates)}
+
+Use the document, entity list, relation definitions, and confidence scores.
+Remove unsupported, duplicated, wrong-direction, or wrong-schema relations.
+Return final deduplicated relations as JSON only.
+
+Output schema:
+{{"relations": [{{"head": "chemical_name", "relation": "UPREGULATOR", "tail": "protein_name"}}]}}
+/no_think"""
+    return [
+        {"role": "system", "content": "You are a ChemProt relation debate agent. Output valid JSON only."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_latent_re_type_prompt(relation_type: str, text: str, entity_list: str):
+    user_prompt = f"""You are the {relation_type} latent relation type agent for ChemProt.
+
+Relation definition:
+{relation_type}: {CHEMPROT_RELATION_DEFINITIONS[relation_type]}
+
+Annotated entities:
+{entity_list}
+
+Document:
+{text}
+
+Read the document and internally identify evidence for {relation_type} only.
+Do not produce a text answer. Pass concise latent evidence to the following ChemProt relation debate agent."""
+    return [
+        {"role": "system", "content": "You are a ChemProt latent RE type agent. Think silently in latent space."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_latent_re_read_prompt(relation_type: str, text: str, entity_list: str):
+    user_prompt = f"""You are the ChemProt latent relation debate agent.
+
+You are reading latent evidence from the independent {relation_type} relation type agent.
+
+Valid relations:
+{_json_block(CHEMPROT_RELATION_DEFINITIONS)}
+
+Annotated entities:
+{entity_list}
+
+Document:
+{text}
+
+Internally absorb useful {relation_type} evidence for the final ChemProt decision.
+Do not produce a text answer. Pass updated debate evidence forward in latent space."""
+    return [
+        {"role": "system", "content": "You are a ChemProt latent RE debate reader. Think silently in latent space."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_latent_re_decode_prompt(text: str, entity_list: str):
+    user_prompt = f"""Output the final ChemProt relation JSON.
+
+You have latent debate evidence gathered from independent ChemProt relation type agents.
+
+Valid relations:
+{_json_block(CHEMPROT_RELATION_DEFINITIONS)}
+
+Annotated entities:
+{entity_list}
+
+Document:
+{text}
+
+Return JSON only. If no relation exists, return {{"relations": []}}.
+
+Output schema:
+{{"relations": [{{"head": "chemical_name", "relation": "UPREGULATOR", "tail": "protein_name"}}]}}
+/no_think"""
+    return [
+        {"role": "system", "content": "You are a ChemProt relation decoder. Output valid JSON only."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_latent_re_c2c_decode_prompt(text: str, entity_list: str):
+    user_prompt = f"""Output the final ChemProt relation JSON.
+
+You have cache evidence from:
+1. selected latent ChemProt relation type agents
+2. a text ChemProt relation debate agent near the end of the cache
+
+Valid relations:
+{_json_block(CHEMPROT_RELATION_DEFINITIONS)}
+
+Annotated entities:
+{entity_list}
+
+Document:
+{text}
+
+Prioritize schema-compatible relation triples encoded by the text debate cache.
+Use latent relation type cache to refine or reject contradictions.
+Return JSON only. If no relation exists, return {{"relations": []}}.
+
+Output schema:
+{{"relations": [{{"head": "chemical_name", "relation": "UPREGULATOR", "tail": "protein_name"}}]}}
+/no_think"""
+    return [
+        {"role": "system", "content": "You are a ChemProt C2C relation decoder. Output valid JSON only."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_latent_verifier_seed_prompt(text: str, entity_list: str, relations):
+    user_prompt = f"""You are the ChemProt latent relation verifier.
+
+Valid relations:
+{_json_block(CHEMPROT_RELATION_DEFINITIONS)}
+
+Annotated entities:
+{entity_list}
+
+Document:
+{text}
+
+RE debate result:
+{_json_block(relations)}
+
+Internally verify support, direction, and schema. Do not produce text."""
+    return [
+        {"role": "system", "content": "You are a ChemProt latent verifier. Think silently in latent space."},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_chemprot_latent_final_decode_prompt(text: str, entity_list: str, relations):
+    user_prompt = f"""Output the final ChemProt extraction JSON.
+
+You have latent verification evidence from the previous verifier.
+
+Valid relations:
+{_json_block(CHEMPROT_RELATION_DEFINITIONS)}
+
+Annotated entities:
+{entity_list}
+
+Document:
+{text}
+
+RE debate result:
+{_json_block(relations)}
+
+Return final JSON only. Do not include explanations or <think> tags.
+
+Output schema:
+{{"relations": [{{"head": "chemical_name", "relation": "UPREGULATOR", "tail": "protein_name"}}]}}
+/no_think"""
+    return [
+        {"role": "system", "content": "You are an expert ChemProt extraction decoder. Output valid JSON only."},
         {"role": "user", "content": user_prompt},
     ]

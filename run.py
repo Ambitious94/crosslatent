@@ -229,8 +229,8 @@ def main():
     args = parser.parse_args()
 
     if args.method == "latent_cross_agent":
-        if args.task != "conll04":
-            raise ValueError("--method latent_cross_agent currently supports --task conll04 only")
+        if args.task not in {"conll04", "chemprot"}:
+            raise ValueError("--method latent_cross_agent currently supports --task conll04 or chemprot only")
         if args.use_vllm:
             raise ValueError("latent_cross_agent v1 supports HF backend only")
         if args.generate_bs != 1:
@@ -325,8 +325,8 @@ def main():
             args=args,
         )
     elif args.method == "cross_agent":
-        if args.task != "conll04":
-            raise ValueError("--method cross_agent currently supports --task conll04 only")
+        if args.task not in {"conll04", "chemprot"}:
+            raise ValueError("--method cross_agent currently supports --task conll04 or chemprot only")
         method = CrossAgentMethod(
             model,
             max_new_tokens=args.max_new_tokens,
